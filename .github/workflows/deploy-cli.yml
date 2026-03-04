@@ -1,5 +1,8 @@
 # Note: ANTHROPIC_API_KEY must be configured in k8s secrets for the API server
 # to enable embedding and summarization features used by the search endpoint.
+#
+# Required secrets:
+#   HOMEBREW_TAP_TOKEN - a PAT with repo scope for tylersmith-art/homebrew-wst
 
 name: Deploy CLI
 
@@ -12,6 +15,8 @@ on:
 jobs:
   deploy-cli:
     runs-on: self-hosted
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -29,15 +34,69 @@ jobs:
 
       - run: pnpm --filter @wanshitong/cli build:binary
 
+      - name: Read CLI version
+        id: version
+        run: echo "version=$(node -p "require('./packages/cli/package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Package tarball
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          mkdir -p wst-${VERSION}
+          cp packages/cli/dist/wst-bundle.cjs wst-${VERSION}/
+          tar czf wst-${VERSION}.tar.gz wst-${VERSION}
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          gh release delete "v${VERSION}" --yes 2>/dev/null || true
+          gh release create "v${VERSION}" \
+            "wst-${VERSION}.tar.gz" \
+            --title "v${VERSION}" \
+            --notes "CLI release v${VERSION}" \
+            --latest
+
       - name: Upload CLI binary artifact
         uses: actions/upload-artifact@v4
         with:
           name: wst-cli
           path: packages/cli/dist/wst-bundle.cjs
 
-      # Future: Add Homebrew tap update step
-      # - name: Update Homebrew formula
-      #   run: |
-      #     SHA=$(shasum -a 256 packages/cli/dist/wst-bundle.cjs | cut -d' ' -f1)
-      #     echo "Binary SHA: $SHA"
-      #     # TODO: Update homebrew-wst repo formula with new SHA
+      - name: Update Homebrew formula
+        if: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          SHA=$(shasum -a 256 "wst-${VERSION}.tar.gz" | cut -d' ' -f1)
+          echo "Version: ${VERSION}, SHA: ${SHA}"
+
+          # Get current formula to obtain its SHA for the update API call
+          FORMULA_SHA=$(gh api repos/tylersmith-art/homebrew-wst/contents/Formula/wst.rb --jq '.sha')
+
+          # Build updated formula
+          FORMULA=$(cat <<RUBY
+          class Wst < Formula
+            desc "Wan Shi Tong CLI - Architecture knowledge search"
+            homepage "https://github.com/tylersmith-art/wanshitong"
+            version "${VERSION}"
+            url "https://github.com/tylersmith-art/wanshitong/releases/download/v#{version}/wst-#{version}.tar.gz"
+            sha256 "${SHA}"
+            license "MIT"
+
+            depends_on "node"
+
+            def install
+              bin.install "wst-bundle.cjs" => "wst"
+            end
+          end
+          RUBY
+          )
+
+          # Push updated formula
+          gh api repos/tylersmith-art/homebrew-wst/contents/Formula/wst.rb \
+            -X PUT \
+            -f message="chore: update wst to v${VERSION}" \
+            -f content="$(echo "$FORMULA" | base64)" \
+            -f sha="$FORMULA_SHA"
