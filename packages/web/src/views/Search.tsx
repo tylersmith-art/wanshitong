@@ -2,17 +2,24 @@ import { useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { useSearch } from "@wanshitong/hooks";
 
-function SimilarityBadge({ similarity }: { similarity: number }) {
+const CONFIDENCE_STYLES: Record<string, { color: string; label: string }> = {
+  high: { color: "bg-green-100 text-green-700", label: "High" },
+  moderate: { color: "bg-yellow-100 text-yellow-700", label: "Moderate" },
+  low: { color: "bg-gray-100 text-gray-600", label: "Low" },
+};
+
+function SimilarityBadge({
+  similarity,
+  confidence,
+}: {
+  similarity: number;
+  confidence?: string;
+}) {
   const pct = Math.round(similarity * 100);
-  const color =
-    pct >= 80
-      ? "bg-green-100 text-green-700"
-      : pct >= 50
-        ? "bg-yellow-100 text-yellow-700"
-        : "bg-gray-100 text-gray-600";
+  const tier = CONFIDENCE_STYLES[confidence ?? "low"] ?? CONFIDENCE_STYLES.low;
   return (
-    <span className={`px-2 py-0.5 rounded text-xs font-medium ${color}`}>
-      {pct}% match
+    <span className={`px-2 py-0.5 rounded text-xs font-medium ${tier.color}`}>
+      {tier.label} ({pct}%)
     </span>
   );
 }
@@ -101,7 +108,10 @@ export function Search() {
               >
                 <div className="flex items-center justify-between mb-2">
                   <span className="font-semibold text-sm">{result.name}</span>
-                  <SimilarityBadge similarity={result.similarity} />
+                  <SimilarityBadge
+                    similarity={result.similarity}
+                    confidence={result.confidence}
+                  />
                 </div>
                 {result.description && (
                   <p className="text-gray-600 text-sm mb-2">

@@ -5,12 +5,15 @@ export type SearchParams = {
   threshold?: number;
 };
 
+export type ConfidenceTier = "high" | "moderate" | "low";
+
 export type SearchResultItem = {
   specId: string;
   name: string;
   description: string;
   content: string;
   similarity: number;
+  confidence: ConfidenceTier;
 };
 
 export type SearchResult = {
