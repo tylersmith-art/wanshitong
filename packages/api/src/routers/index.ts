@@ -7,6 +7,7 @@ import { orgRouter } from "./org.js";
 import { apiKeyRouter } from "./apiKey.js";
 import { specRouter } from "./spec.js";
 import { projectRouter } from "./project.js";
+import { searchRouter } from "./search.js";
 
 export const appRouter = router({
   user: userRouter,
@@ -17,6 +18,7 @@ export const appRouter = router({
   apiKey: apiKeyRouter,
   spec: specRouter,
   project: projectRouter,
+  search: searchRouter,
 });
 
 export type AppRouter = typeof appRouter;

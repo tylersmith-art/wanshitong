@@ -12,6 +12,8 @@ import { ApiKeys } from "./views/ApiKeys.js";
 import { Specs } from "./views/Specs.js";
 import { SpecDetail } from "./views/SpecDetail.js";
 import { SpecEditor } from "./views/SpecEditor.js";
+import { Projects } from "./views/Projects.js";
+import { ProjectDetail } from "./views/ProjectDetail.js";
 import { Admin } from "./views/Admin.js";
 import { AuthGuard } from "./components/AuthGuard.js";
 
@@ -105,6 +107,22 @@ export function App() {
             element={
               <AuthGuard>
                 <SpecEditor />
+              </AuthGuard>
+            }
+          />
+          <Route
+            path="/projects"
+            element={
+              <AuthGuard>
+                <Projects />
+              </AuthGuard>
+            }
+          />
+          <Route
+            path="/projects/:id"
+            element={
+              <AuthGuard>
+                <ProjectDetail />
               </AuthGuard>
             }
           />
