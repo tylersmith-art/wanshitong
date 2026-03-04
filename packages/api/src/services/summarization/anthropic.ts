@@ -21,7 +21,7 @@ export function createAnthropicSummarizationAdapter(config: {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            model: "claude-3-5-haiku-latest",
+            model: "claude-haiku-4-5-20251001",
             max_tokens: params.maxLength ?? 300,
             system:
               "You are a technical summarizer. Produce a concise summary of the following architecture specification. The summary should be suitable for vector embedding and semantic search. Focus on key technologies, patterns, constraints, and decisions.",
