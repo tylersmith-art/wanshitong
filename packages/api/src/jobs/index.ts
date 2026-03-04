@@ -5,6 +5,14 @@ import {
   registerWelcomeNotificationHandler,
   WELCOME_NOTIFICATION,
 } from "./handlers/sendWelcomeNotification.js";
+import {
+  registerGenerateSummaryHandler,
+  GENERATE_SUMMARY,
+} from "./handlers/generateSummary.js";
+import {
+  registerGenerateEmbeddingHandler,
+  GENERATE_EMBEDDING,
+} from "./handlers/generateEmbedding.js";
 
 let boss: PgBoss | null = null;
 
@@ -21,9 +29,13 @@ export async function initJobs(connectionString: string): Promise<void> {
   // pg-boss v10 requires explicit queue creation before work()/send()
   await boss.createQueue(EXAMPLE_JOB);
   await boss.createQueue(WELCOME_NOTIFICATION);
+  await boss.createQueue(GENERATE_SUMMARY);
+  await boss.createQueue(GENERATE_EMBEDDING);
 
   await registerExampleHandler(boss);
   await registerWelcomeNotificationHandler(boss);
+  await registerGenerateSummaryHandler(boss);
+  await registerGenerateEmbeddingHandler(boss);
 }
 
 export async function closeJobs(): Promise<void> {

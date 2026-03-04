@@ -75,6 +75,7 @@ describe("notificationRouter", () => {
         : null,
       db: mockDb as any,
       pubsub: mockPubsub as any,
+      rawToken: null,
     });
 
   beforeEach(() => {
@@ -322,6 +323,7 @@ describe("notificationRouter", () => {
       user: { sub: "unknown-sub" },
       db: mockDb as any,
       pubsub: mockPubsub as any,
+      rawToken: null,
     });
     await expect(
       caller.notification.registerPushToken({ token: "tok" }),

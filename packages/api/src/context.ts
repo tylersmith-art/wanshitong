@@ -9,6 +9,7 @@ export type Context = {
   user: JWTPayload | null;
   db: ReturnType<typeof getDb>;
   pubsub: PgPubSub;
+  rawToken: string | null;
 };
 
 export function createContextFactory(pubsub: PgPubSub) {
@@ -16,14 +17,18 @@ export function createContextFactory(pubsub: PgPubSub) {
     req,
   }: CreateExpressContextOptions): Promise<Context> {
     let user: JWTPayload | null = null;
+    let rawToken: string | null = null;
 
     const authHeader = req.headers.authorization;
     if (authHeader?.startsWith("Bearer ")) {
-      const token = authHeader.slice(7);
-      user = await verifyToken(token);
+      rawToken = authHeader.slice(7);
+      // Only verify as JWT if it doesn't look like an API key
+      if (!rawToken.startsWith("wst_")) {
+        user = await verifyToken(rawToken);
+      }
     }
 
-    return { user, db: getDb(), pubsub };
+    return { user, db: getDb(), pubsub, rawToken };
   };
 }
 
@@ -32,12 +37,16 @@ export function createWSContextFactory(pubsub: PgPubSub) {
     opts: CreateWSSContextFnOptions,
   ): Promise<Context> {
     let user: JWTPayload | null = null;
+    let rawToken: string | null = null;
 
     const token = opts.info.connectionParams?.token as string | undefined;
     if (token) {
-      user = await verifyToken(token);
+      rawToken = token;
+      if (!token.startsWith("wst_")) {
+        user = await verifyToken(token);
+      }
     }
 
-    return { user, db: getDb(), pubsub };
+    return { user, db: getDb(), pubsub, rawToken };
   };
 }

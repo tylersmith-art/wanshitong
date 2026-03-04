@@ -1,0 +1,23 @@
+{
+  "name": "@wanshitong/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "wst": "./dist/wst-bundle.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "build:binary": "npx esbuild src/index.ts --bundle --platform=node --format=esm --outfile=dist/wst-bundle.js --external:node:* --banner:js='#!/usr/bin/env node'",
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "commander": "^12.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}

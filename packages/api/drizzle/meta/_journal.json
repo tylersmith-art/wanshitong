@@ -15,6 +15,13 @@
       "when": 1771047909641,
       "tag": "0001_faithful_sebastian_shaw",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1772592075838,
+      "tag": "0002_gorgeous_black_cat",
+      "breakpoints": true
     }
   ]
 }
