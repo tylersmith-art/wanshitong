@@ -9,14 +9,14 @@
 class Wst < Formula
   desc "Wan Shi Tong CLI - Architecture knowledge search"
   homepage "https://github.com/<org>/wanshitong"
-  url "https://github.com/<org>/wanshitong/releases/download/v#{version}/wst-bundle.js"
+  url "https://github.com/<org>/wanshitong/releases/download/v#{version}/wst-bundle.cjs"
   sha256 "<sha256>"
   license "MIT"
 
   depends_on "node"
 
   def install
-    bin.install "wst-bundle.js" => "wst"
+    bin.install "wst-bundle.cjs" => "wst"
   end
 end
 ```

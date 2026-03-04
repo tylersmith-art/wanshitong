@@ -33,11 +33,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: wst-cli
-          path: packages/cli/dist/wst-bundle.js
+          path: packages/cli/dist/wst-bundle.cjs
 
       # Future: Add Homebrew tap update step
       # - name: Update Homebrew formula
       #   run: |
-      #     SHA=$(shasum -a 256 packages/cli/dist/wst-bundle.js | cut -d' ' -f1)
+      #     SHA=$(shasum -a 256 packages/cli/dist/wst-bundle.cjs | cut -d' ' -f1)
       #     echo "Binary SHA: $SHA"
       #     # TODO: Update homebrew-wst repo formula with new SHA

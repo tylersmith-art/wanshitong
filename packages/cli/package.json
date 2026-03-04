@@ -4,11 +4,11 @@
   "private": true,
   "type": "module",
   "bin": {
-    "wst": "./dist/wst-bundle.js"
+    "wst": "./dist/wst-bundle.cjs"
   },
   "scripts": {
     "build": "tsc",
-    "build:binary": "npx esbuild src/index.ts --bundle --platform=node --format=esm --outfile=dist/wst-bundle.js --external:node:* --banner:js='#!/usr/bin/env node'",
+    "build:binary": "npx esbuild src/index.ts --bundle --platform=node --format=cjs --outfile=dist/wst-bundle.cjs --external:node:* --banner:js='#!/usr/bin/env node'",
     "dev": "tsc --watch",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
