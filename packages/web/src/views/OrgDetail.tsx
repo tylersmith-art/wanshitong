@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useParams, Link } from "react-router-dom";
-import { trpc, useOrgMembers } from "@wanshitong/hooks";
+import { trpc, useOrgMembers, useProjects } from "@wanshitong/hooks";
 
 export function OrgDetail() {
   const { id } = useParams<{ id: string }>();
@@ -10,9 +10,18 @@ export function OrgDetail() {
   );
   const { members, isLoading, error, addMember, removeMember, updateRole, isAdding } =
     useOrgMembers(id ?? "");
+  const {
+    projects,
+    isLoading: projectsLoading,
+    error: projectsError,
+    createProject,
+    isCreating,
+  } = useProjects(id ?? "");
 
   const [userId, setUserId] = useState("");
   const [role, setRole] = useState<"member" | "admin" | "owner">("member");
+  const [projectName, setProjectName] = useState("");
+  const [projectDescription, setProjectDescription] = useState("");
 
   const handleAddMember = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -20,6 +29,18 @@ export function OrgDetail() {
     await addMember({ orgId: id, userId, role });
     setUserId("");
     setRole("member");
+  };
+
+  const handleCreateProject = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!projectName || !id) return;
+    await createProject({
+      name: projectName,
+      description: projectDescription || undefined,
+      orgId: id,
+    });
+    setProjectName("");
+    setProjectDescription("");
   };
 
   const org = orgQuery.data;
@@ -148,6 +169,85 @@ export function OrgDetail() {
           </table>
         ) : (
           <p className="text-gray-400 text-center p-8">No members yet.</p>
+        )}
+      </div>
+
+      {projectsError && (
+        <div className="bg-red-50 text-red-600 p-3 rounded mb-4 mt-8">{projectsError}</div>
+      )}
+
+      <div className="bg-white border border-gray-200 rounded-lg p-6 mb-8 mt-8">
+        <h2 className="text-lg font-semibold mb-4">Create Project</h2>
+        <form onSubmit={handleCreateProject} className="flex gap-2">
+          <input
+            value={projectName}
+            onChange={(e) => setProjectName(e.target.value)}
+            placeholder="Project name"
+            required
+            className="flex-1 px-3 py-2 border border-gray-300 rounded text-sm"
+          />
+          <input
+            value={projectDescription}
+            onChange={(e) => setProjectDescription(e.target.value)}
+            placeholder="Description (optional)"
+            className="flex-1 px-3 py-2 border border-gray-300 rounded text-sm"
+          />
+          <button
+            type="submit"
+            disabled={isCreating}
+            className="px-5 py-2 bg-indigo-600 text-white rounded text-sm cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            {isCreating ? "Creating..." : "Create"}
+          </button>
+        </form>
+      </div>
+
+      <div>
+        <h2 className="text-lg font-semibold mb-4">Projects</h2>
+        {projectsLoading ? (
+          <p className="text-gray-400 text-center p-8">Loading...</p>
+        ) : projects.length ? (
+          <table className="w-full border-collapse bg-white border border-gray-200 rounded-lg overflow-hidden">
+            <thead>
+              <tr>
+                <th className="px-4 py-3 text-left bg-gray-50 font-semibold text-xs uppercase text-gray-400">
+                  Name
+                </th>
+                <th className="px-4 py-3 text-left bg-gray-50 font-semibold text-xs uppercase text-gray-400">
+                  Description
+                </th>
+                <th className="px-4 py-3 text-left bg-gray-50 font-semibold text-xs uppercase text-gray-400">
+                  Created
+                </th>
+                <th className="px-4 py-3 text-right bg-gray-50 font-semibold text-xs uppercase text-gray-400">
+                  Actions
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {projects.map((project) => (
+                <tr key={project.id} className="border-t border-gray-100">
+                  <td className="px-4 py-3 text-sm">{project.name}</td>
+                  <td className="px-4 py-3 text-sm text-gray-500">
+                    {project.description ?? "\u2014"}
+                  </td>
+                  <td className="px-4 py-3 text-sm">
+                    {new Date(project.createdAt).toLocaleDateString()}
+                  </td>
+                  <td className="px-4 py-3 text-sm text-right">
+                    <Link
+                      to={`/projects/${project.id}`}
+                      className="px-3 py-1 bg-indigo-600 text-white rounded text-xs no-underline hover:bg-indigo-700"
+                    >
+                      Manage
+                    </Link>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <p className="text-gray-400 text-center p-8">No projects yet.</p>
         )}
       </div>
     </div>
