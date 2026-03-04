@@ -36,7 +36,9 @@ jobs:
 
       - name: Read CLI version
         id: version
-        run: echo "version=$(node -p "require('./packages/cli/package.json').version")" >> "$GITHUB_OUTPUT"
+        run: |
+          CLI_VERSION=$(node -p 'require("./packages/cli/package.json").version')
+          echo "version=${CLI_VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Package tarball
         run: |
