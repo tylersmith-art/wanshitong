@@ -6,7 +6,7 @@ export function Home() {
   const { isAuthenticated, loginWithRedirect } = useAuth0();
 
   return (
-    <div className="text-center pt-12">
+    <div className="text-center pt-12 pb-16">
       <h1 className="text-5xl font-bold mb-4">Wan Shi Tong</h1>
       <p className="text-xl text-gray-500 mb-8 max-w-2xl mx-auto">
         Architecture knowledge for your codebase — semantic search over your
