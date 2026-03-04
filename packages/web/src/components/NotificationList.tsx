@@ -1,5 +1,5 @@
 import { useNavigate } from "react-router-dom";
-import { useNotifications } from "@template/hooks";
+import { useNotifications } from "@wanshitong/hooks";
 
 function timeAgo(dateStr: string): string {
   const seconds = Math.floor(

@@ -58,7 +58,7 @@ Re-export from `packages/shared/src/schemas/index.ts`.
 
 ```typescript
 // packages/api/src/routers/post.ts
-import { CreatePostSchema } from "@template/shared";
+import { CreatePostSchema } from "@wanshitong/shared";
 import { router, publicProcedure, protectedProcedure } from "../trpc.js";
 import { posts } from "../db/schema.js";
 
@@ -97,7 +97,7 @@ export const appRouter = router({
 
 ```typescript
 // in any React component
-import { trpc } from "@template/hooks";
+import { trpc } from "@wanshitong/hooks";
 
 function Posts() {
   const { data: posts } = trpc.post.list.useQuery();
@@ -145,7 +145,7 @@ it("list returns posts", async () => {
 
 ## How to Debug
 
-- **Type errors in the client?** The type chain is: schema → router → AppRouter type → hooks. Check that your router is added to `appRouter` in `routers/index.ts` and that `@template/shared` is rebuilt (`pnpm build --filter=@template/shared`).
+- **Type errors in the client?** The type chain is: schema → router → AppRouter type → hooks. Check that your router is added to `appRouter` in `routers/index.ts` and that `@wanshitong/shared` is rebuilt (`pnpm build --filter=@wanshitong/shared`).
 - **"Procedure not found" at runtime?** Rebuild: `pnpm build`. The hooks package imports types from the API build output.
 - **Input validation fails?** tRPC uses your Zod schema's `.parse()`. Check the error's `issues` array for field-level messages.
 - **Auth errors?** `protectedProcedure` throws `UNAUTHORIZED` if `ctx.user` is null. Check the Authorization header is being sent (look in TRPCProvider's `headers()` function).

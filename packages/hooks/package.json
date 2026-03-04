@@ -1,5 +1,5 @@
 {
-  "name": "@template/hooks",
+  "name": "@wanshitong/hooks",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -25,8 +25,8 @@
     "react": "^19.0.0"
   },
   "devDependencies": {
-    "@template/api": "workspace:*",
-    "@template/shared": "workspace:*",
+    "@wanshitong/api": "workspace:*",
+    "@wanshitong/shared": "workspace:*",
     "@types/react": "^19.0.0",
     "typescript": "^5.7.0"
   },

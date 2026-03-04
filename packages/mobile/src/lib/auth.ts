@@ -12,7 +12,7 @@ const AUTH0_CLIENT_ID =
 const AUTH0_AUDIENCE =
   Constants.expoConfig?.extra?.auth0Audience ?? "YOUR_AUDIENCE";
 
-const redirectUri = AuthSession.makeRedirectUri({ scheme: "TEMPLATE_SCHEME", path: "auth" });
+const redirectUri = AuthSession.makeRedirectUri({ scheme: "wanshitong", path: "auth" });
 
 const discovery: AuthSession.DiscoveryDocument = {
   authorizationEndpoint: `https://${AUTH0_DOMAIN}/authorize`,

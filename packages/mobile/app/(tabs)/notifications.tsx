@@ -7,7 +7,7 @@ import {
   StyleSheet,
 } from "react-native";
 import { router } from "expo-router";
-import { useNotifications } from "@template/hooks";
+import { useNotifications } from "@wanshitong/hooks";
 import { useAuth } from "../../src/contexts/AuthContext";
 
 function formatRelativeTime(dateString: string): string {

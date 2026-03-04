@@ -159,14 +159,14 @@ GitHub Actions CI runs build + typecheck + test on every PR to `main`. Three dep
 ---
 
 ### [Web App](./web-app.md)
-React 19 SPA built with Vite + TailwindCSS v4. React Router v7 for navigation. `AuthGuard` component protects routes. tRPC hooks from `@template/hooks` for all data fetching. Views: Home, Users, Profile, Admin.
+React 19 SPA built with Vite + TailwindCSS v4. React Router v7 for navigation. `AuthGuard` component protects routes. tRPC hooks from `@wanshitong/hooks` for all data fetching. Views: Home, Users, Profile, Admin.
 
 **Use when:** Adding a page, adding a nav link, building a form that calls the API, protecting a route behind auth, or styling with Tailwind.
 
 ---
 
 ### [Mobile App](./mobile-app.md)
-Expo Router (React Native) with tab navigation. Auth0 via `expo-auth-session` with SecureStore tokens. Shares the same `@template/hooks` tRPC hooks as web. Scaffolds for push notifications, calendar access, and file downloads.
+Expo Router (React Native) with tab navigation. Auth0 via `expo-auth-session` with SecureStore tokens. Shares the same `@wanshitong/hooks` tRPC hooks as web. Scaffolds for push notifications, calendar access, and file downloads.
 
 **Use when:** Adding a mobile screen, integrating a native API (camera, location, contacts), setting up push notifications, or debugging auth/token issues on device.
 

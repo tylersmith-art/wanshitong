@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { trpc, useNotificationToast } from "@template/hooks";
+import { trpc, useNotificationToast } from "@wanshitong/hooks";
 
 type Toast = {
   id: string;

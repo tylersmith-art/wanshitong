@@ -1,4 +1,4 @@
-import type { SyncEvent } from "@template/shared";
+import type { SyncEvent } from "@wanshitong/shared";
 
 type CacheUpdater<T> = {
   onCreated?: (data: T) => void;

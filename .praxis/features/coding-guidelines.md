@@ -263,7 +263,7 @@ schemas/user.test.ts
 
 1. Node built-ins (`node:crypto`, `node:http`)
 2. External packages (`drizzle-orm`, `@trpc/server`, `zod`)
-3. Internal packages (`@template/shared`, `@template/hooks`)
+3. Internal packages (`@wanshitong/shared`, `@wanshitong/hooks`)
 4. Relative imports (`./schema.js`, `../lib/logger.js`)
 
 Blank line between each group. The codebase already follows this pattern — keep it consistent.

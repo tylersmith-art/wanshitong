@@ -11,7 +11,7 @@ import {
   ActivityIndicator,
 } from "react-native";
 import Constants from "expo-constants";
-import { trpc } from "@template/hooks";
+import { trpc } from "@wanshitong/hooks";
 import { useAuth } from "../../src/contexts/AuthContext";
 import { registerForPushNotifications } from "../../src/lib/notifications";
 

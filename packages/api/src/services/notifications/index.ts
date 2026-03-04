@@ -1,5 +1,5 @@
 import { eq, inArray } from "drizzle-orm";
-import { syncChannel, type SyncEvent, type Notification } from "@template/shared";
+import { syncChannel, type SyncEvent, type Notification } from "@wanshitong/shared";
 import { notifications, pushTokens, users } from "../../db/schema.js";
 import { getPushAdapter } from "../push/index.js";
 import { getLogger } from "../../lib/logger.js";

@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { Alert } from "react-native";
 import { Stack, router } from "expo-router";
 import Constants from "expo-constants";
-import { TRPCProvider, trpc, useNotificationToast, useSessionSync } from "@template/hooks";
+import { TRPCProvider, trpc, useNotificationToast, useSessionSync } from "@wanshitong/hooks";
 import { AuthProvider, useAuth } from "../src/contexts/AuthContext";
 import {
   registerForPushNotifications,
@@ -11,7 +11,7 @@ import {
 
 const API_URL =
   Constants.expoConfig?.extra?.apiUrl ??
-  "https://TEMPLATE_DOMAIN/api/trpc";
+  "https://wanshitong.tylermakes.art/api/trpc";
 
 function SessionSync() {
   const { isAuthenticated, user } = useAuth();

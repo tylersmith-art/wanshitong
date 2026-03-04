@@ -8,7 +8,7 @@ import {
   syncChannel,
   type SyncEvent,
   type Notification,
-} from "@template/shared";
+} from "@wanshitong/shared";
 import { router, publicProcedure, protectedProcedure } from "../trpc.js";
 import { notifications, pushTokens, users } from "../db/schema.js";
 import { iterateEvents } from "../lib/iterateEvents.js";

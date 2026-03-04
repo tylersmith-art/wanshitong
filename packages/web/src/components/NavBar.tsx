@@ -1,6 +1,6 @@
 import { useAuth0 } from "@auth0/auth0-react";
 import { Link, useLocation } from "react-router-dom";
-import { trpc } from "@template/hooks";
+import { trpc } from "@wanshitong/hooks";
 
 export function NavBar() {
   const { isAuthenticated, isLoading, user, loginWithRedirect, logout } =

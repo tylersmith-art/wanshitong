@@ -1,6 +1,6 @@
 import { Tabs } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
-import { trpc } from "@template/hooks";
+import { trpc } from "@wanshitong/hooks";
 
 export default function TabLayout() {
   const unreadQuery = trpc.notification.unreadCount.useQuery(undefined, {

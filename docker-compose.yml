@@ -3,9 +3,9 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_USER: template_user
-      POSTGRES_PASSWORD: template_pass
-      POSTGRES_DB: template_db
+      POSTGRES_USER: wanshitong_user
+      POSTGRES_PASSWORD: nUwZn4XoyoNk02bccij22CYFpLwkxN3n
+      POSTGRES_DB: wanshitong
     ports:
       - "5432:5432"
     volumes:

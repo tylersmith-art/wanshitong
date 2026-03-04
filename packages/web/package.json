@@ -1,5 +1,5 @@
 {
-  "name": "@template/web",
+  "name": "@wanshitong/web",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -13,14 +13,14 @@
   },
   "dependencies": {
     "@auth0/auth0-react": "^2.2.0",
-    "@template/hooks": "workspace:*",
+    "@wanshitong/hooks": "workspace:*",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-router-dom": "^7.0.0"
   },
   "devDependencies": {
-    "@template/api": "workspace:*",
-    "@template/shared": "workspace:*",
+    "@wanshitong/api": "workspace:*",
+    "@wanshitong/shared": "workspace:*",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@tailwindcss/vite": "^4.0.0",

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useUsers, trpc } from "@template/hooks";
+import { useUsers, trpc } from "@wanshitong/hooks";
 
 export function Users() {
   const { users, isLoading, error, createUser, isCreating } = useUsers();

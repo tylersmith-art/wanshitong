@@ -22,7 +22,7 @@ packages/
 Shared React hooks package consumed by both web and mobile. The key design: `TRPCProvider` accepts a configurable `apiUrl` (web passes `"/api/trpc"`, mobile passes an absolute URL) and `getAccessToken` callback.
 
 ### Files to create:
-- `packages/hooks/package.json` — deps: `@trpc/client`, `@trpc/react-query`, `@tanstack/react-query`, `react`; devDeps: `@template/api`, `@template/shared`, `@types/react`, `typescript`
+- `packages/hooks/package.json` — deps: `@trpc/client`, `@trpc/react-query`, `@tanstack/react-query`, `react`; devDeps: `@wanshitong/api`, `@wanshitong/shared`, `@types/react`, `typescript`
 - `packages/hooks/tsconfig.json` — extends base, `jsx: "react-jsx"`, composite, references shared + api
 - `packages/hooks/src/trpc.ts` — `createTRPCReact<AppRouter>()` export (typed tRPC React hooks)
 - `packages/hooks/src/providers/TRPCProvider.tsx` — wraps `trpc.Provider` + `QueryClientProvider`, accepts `apiUrl` and `getAccessToken` props, injects Bearer token via `httpBatchLink` headers
@@ -30,7 +30,7 @@ Shared React hooks package consumed by both web and mobile. The key design: `TRP
 - `packages/hooks/src/index.ts` — barrel export of `trpc`, `TRPCProvider`, `useUsers`
 
 ### Verify:
-- `pnpm install && pnpm --filter @template/hooks build` compiles cleanly
+- `pnpm install && pnpm --filter @wanshitong/hooks build` compiles cleanly
 
 ---
 
@@ -45,7 +45,7 @@ Functionally equivalent rewrite. Same 3 routes, same Auth0 integration, same tRP
 - `src/router/index.ts` (routing is inline in App.tsx)
 
 ### Files to create/replace:
-- `package.json` — remove vue/vue-router/@auth0/auth0-vue/vue-tsc/@vitejs/plugin-vue/@tanstack/vue-query; add react/react-dom/react-router-dom/@auth0/auth0-react/@template/hooks/@vitejs/plugin-react/tailwindcss/@tailwindcss/vite
+- `package.json` — remove vue/vue-router/@auth0/auth0-vue/vue-tsc/@vitejs/plugin-vue/@tanstack/vue-query; add react/react-dom/react-router-dom/@auth0/auth0-react/@wanshitong/hooks/@vitejs/plugin-react/tailwindcss/@tailwindcss/vite
 - `tsconfig.json` — `jsx: "react-jsx"`, remove `.vue` includes, add `.tsx`, add hooks reference
 - `vite.config.ts` — `@vitejs/plugin-react` + `@tailwindcss/vite` instead of vue plugin
 - `env.d.ts` — same env vars, remove `*.vue` module declaration
@@ -57,10 +57,10 @@ Functionally equivalent rewrite. Same 3 routes, same Auth0 integration, same tRP
 - `src/components/NavBar.tsx` — nav links + login/logout using `useAuth0()`, Tailwind classes
 - `src/views/Home.tsx` — feature cards, Tailwind styling
 - `src/views/Profile.tsx` — Auth0 user info display
-- `src/views/Users.tsx` — uses `useUsers()` from `@template/hooks` for CRUD
+- `src/views/Users.tsx` — uses `useUsers()` from `@wanshitong/hooks` for CRUD
 
 ### Files to modify:
-- `Dockerfile` — add `COPY packages/hooks/...` lines and `pnpm --filter @template/hooks build` step
+- `Dockerfile` — add `COPY packages/hooks/...` lines and `pnpm --filter @wanshitong/hooks build` step
 - `web-server.js` — no changes needed
 
 ### Verify:
@@ -101,7 +101,7 @@ Then customize:
 - `app/_layout.tsx` — root layout: `AuthProvider` > `TRPCProvider` (apiUrl = absolute project URL) > `Stack`
 - `app/(tabs)/_layout.tsx` — tab navigator: Home, Users, Health, Profile
 - `app/(tabs)/index.tsx` — home screen
-- `app/(tabs)/users.tsx` — uses `useUsers()` from `@template/hooks` (shared with web)
+- `app/(tabs)/users.tsx` — uses `useUsers()` from `@wanshitong/hooks` (shared with web)
 - `app/(tabs)/health.tsx` — HealthKit via `react-native-healthkit` (request auth, read step count)
 - `app/(tabs)/profile.tsx` — auth state, login/logout, user info
 
@@ -117,7 +117,7 @@ Then customize:
 - `tsconfig.json` — extends `expo/tsconfig.base` (NOT the monorepo base — Metro has different TS requirements)
 
 ### Key dependencies:
-- `@template/hooks`, `@template/shared`
+- `@wanshitong/hooks`, `@wanshitong/shared`
 - `expo`, `expo-router`, `react`, `react-native`
 - `expo-auth-session`, `expo-web-browser`, `expo-secure-store`, `expo-crypto`
 - `expo-notifications`, `expo-calendar`, `expo-file-system`, `expo-constants`

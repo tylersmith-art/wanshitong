@@ -26,7 +26,7 @@ packages/web/src/
 
 ```typescript
 // packages/web/src/views/Directory.tsx
-import { trpc } from "@template/hooks";
+import { trpc } from "@wanshitong/hooks";
 
 export function Directory() {
   // Use tRPC hooks for data
@@ -83,7 +83,7 @@ import { Directory } from "./views/Directory.js";
 ### Calling the API
 
 ```typescript
-import { trpc } from "@template/hooks";
+import { trpc } from "@wanshitong/hooks";
 
 // Query (GET)
 const { data, isLoading, error } = trpc.user.list.useQuery();
@@ -107,7 +107,7 @@ trpc.user.onSync.useSubscription(undefined, {
 ### Using shared hooks
 
 ```typescript
-import { useUsers } from "@template/hooks";
+import { useUsers } from "@wanshitong/hooks";
 
 function MyComponent() {
   const { users, isLoading, error, createUser, deleteUser, isCreating, isDeleting } = useUsers();
@@ -148,7 +148,7 @@ const { isAuthenticated, isLoading, user } = useAuth0();
 
 The web package does not have tests yet -- the `test` script is a no-op placeholder. The steps below are optional future setup for adding component testing:
 
-1. Install test dependencies: `pnpm --filter @template/web add -D vitest @testing-library/react @testing-library/jest-dom jsdom`
+1. Install test dependencies: `pnpm --filter @wanshitong/web add -D vitest @testing-library/react @testing-library/jest-dom jsdom`
 2. Create `packages/web/vitest.config.ts` with `environment: "jsdom"`
 3. Write tests:
 
@@ -170,7 +170,7 @@ describe("Home", () => {
 
 - **Blank page?** Check the browser console for errors. Most common: missing env vars (`VITE_AUTH0_DOMAIN`, `VITE_AUTH0_CLIENT_ID`, `VITE_AUTH0_AUDIENCE`).
 - **tRPC calls failing?** Check the Network tab. If requests go to `/api/trpc` and return 404, the Vite dev proxy isn't running or misconfigured. In production, check that the API is up and CORS allows the web origin.
-- **Types out of date?** Run `pnpm build --filter=@template/shared --filter=@template/api --filter=@template/hooks`. The web package reads types from the compiled output of other packages.
+- **Types out of date?** Run `pnpm build --filter=@wanshitong/shared --filter=@wanshitong/api --filter=@wanshitong/hooks`. The web package reads types from the compiled output of other packages.
 - **Auth redirect loop?** Usually a misconfigured callback URL in Auth0. The redirect_uri must match `window.location.origin` exactly.
 - **Styles not applying?** TailwindCSS v4 uses `@import "tailwindcss"` in the CSS file. Make sure `packages/web/src/index.css` has this import and the Vite Tailwind plugin is in `vite.config.ts`.
 - **HMR not working?** Vite HMR should work out of the box. If not, check for syntax errors that prevent the module from loading.

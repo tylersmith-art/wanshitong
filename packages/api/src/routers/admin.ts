@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
-import { UpdateUserRoleSchema } from "@template/shared";
+import { UpdateUserRoleSchema } from "@wanshitong/shared";
 import { router, protectedProcedure } from "../trpc.js";
 import { adminProcedure } from "../middleware/requireRole.js";
 import { users } from "../db/schema.js";

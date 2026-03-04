@@ -11,8 +11,8 @@ RUN pnpm install --frozen-lockfile
 COPY tsconfig.base.json ./
 COPY packages/shared/ packages/shared/
 COPY packages/api/ packages/api/
-RUN pnpm --filter @template/shared build
-RUN pnpm --filter @template/api build
+RUN pnpm --filter @wanshitong/shared build
+RUN pnpm --filter @wanshitong/api build
 RUN mkdir -p packages/api/drizzle
 
 FROM base AS production

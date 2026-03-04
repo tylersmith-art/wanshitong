@@ -29,7 +29,7 @@ cd my-app
 ```
 
 The init script handles everything:
-1. Replaces `@template/` placeholders with `@my-app/` across all source files, Dockerfiles, and manifests
+1. Replaces `@wanshitong/` placeholders with `@my-app/` across all source files, Dockerfiles, and manifests
 2. Generates a strong database password
 3. Creates `.env` files (local dev + deployment)
 4. SCPs deployment env files to the self-hosted runner (`homebase.local`)

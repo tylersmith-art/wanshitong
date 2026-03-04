@@ -25,11 +25,11 @@ packages/mobile/
 
 ## How It's Wired
 
-The mobile app shares the same `@template/hooks` package as the web app:
+The mobile app shares the same `@wanshitong/hooks` package as the web app:
 
 ```typescript
 // packages/mobile/app/_layout.tsx
-import { TRPCProvider } from "@template/hooks";
+import { TRPCProvider } from "@wanshitong/hooks";
 import { AuthProvider, useAuth } from "../src/contexts/AuthContext";
 
 function AppInner() {
@@ -78,7 +78,7 @@ Note: Expo Router requires `export default` for route files. This is the one exc
 ```typescript
 // packages/mobile/app/(tabs)/settings.tsx
 import { View, Text } from "react-native";
-import { trpc } from "@template/hooks";
+import { trpc } from "@wanshitong/hooks";
 
 export default function Settings() {
   // Same tRPC hooks as web
@@ -309,7 +309,7 @@ Mobile testing typically uses:
 The mobile package doesn't have test infra set up yet. To add it:
 
 ```bash
-pnpm --filter @template/mobile add -D jest @testing-library/react-native
+pnpm --filter @wanshitong/mobile add -D jest @testing-library/react-native
 ```
 
 For tRPC logic, test the shared hooks in the `hooks` package instead — the mobile app consumes them identically to web.
@@ -326,4 +326,4 @@ For tRPC logic, test the shared hooks in the `hooks` package instead — the mob
 - **Build fails with "device not in provisioning profile"?** Open the `.xcworkspace` in Xcode, go to Signing & Capabilities, and Xcode will offer to register the device. See step 3 in per-machine setup.
 - **App installs but won't open ("Untrusted Developer")?** On your iPhone: Settings > General > VPN & Device Management > tap your developer account > Trust.
 - **Expo prebuild issues?** Run `pnpm mobile:prebuild` to regenerate native projects. If that fails, try `npx expo prebuild --clean`.
-- **Types out of date?** The mobile app imports from `@template/hooks` which imports types from `@template/api`. Run `pnpm build` to rebuild the type chain.
+- **Types out of date?** The mobile app imports from `@wanshitong/hooks` which imports types from `@wanshitong/api`. Run `pnpm build` to rebuild the type chain.

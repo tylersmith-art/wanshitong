@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import { CreateUserSchema, syncChannel, type SyncEvent, type User } from "@template/shared";
+import { CreateUserSchema, syncChannel, type SyncEvent, type User } from "@wanshitong/shared";
 import { tracked, TRPCError } from "@trpc/server";
 import { router, publicProcedure, protectedProcedure } from "../trpc.js";
 import { users } from "../db/schema.js";

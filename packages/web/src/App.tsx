@@ -1,6 +1,6 @@
 import { useAuth0 } from "@auth0/auth0-react";
 import { Routes, Route } from "react-router-dom";
-import { TRPCProvider, useSessionSync } from "@template/hooks";
+import { TRPCProvider, useSessionSync } from "@wanshitong/hooks";
 import { NavBar } from "./components/NavBar.js";
 import { NotificationToast } from "./components/NotificationToast.js";
 import { Home } from "./views/Home.js";

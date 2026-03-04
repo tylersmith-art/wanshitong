@@ -38,7 +38,7 @@ The script runs 10 steps in sequence. Each step prints its number and what it's 
 |---|---|
 | Prerequisites | Checks for required tools (node, pnpm, docker, gh, git, openssl, curl) |
 | Credential check | Sources `~/.config/trpc-template/defaults.env` and checks each credential group (Auth0, GoDaddy, server IP, M2M, push notifications). Only prompts for groups that are missing — existing credentials are reused silently. New features can add credential groups and existing installs get prompted on next run. |
-| 1 | Replaces `@template/` scope with `@<project-name>/` in all source files |
+| 1 | Replaces `@wanshitong/` scope with `@<project-name>/` in all source files |
 | 2 | Creates local `.env` with database credentials, Auth0 config, and API settings |
 | 3 | Creates deployment env files in `~/envs/` for the K8s deploy workflows |
 | 4 | Copies deployment env files to the server (scp, or local cp if running on homebase) |

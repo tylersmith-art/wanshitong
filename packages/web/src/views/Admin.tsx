@@ -1,4 +1,4 @@
-import { trpc } from "@template/hooks";
+import { trpc } from "@wanshitong/hooks";
 import { useState } from "react";
 
 const ROLES = ["user", "admin"] as const;

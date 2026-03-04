@@ -63,7 +63,7 @@ export {
 Rebuild shared so downstream packages see the new types:
 
 ```bash
-pnpm build --filter=@template/shared
+pnpm build --filter=@wanshitong/shared
 ```
 
 > **Why Zod?** The schemas serve triple duty: runtime validation on API inputs, TypeScript types via `z.infer`, and documentation of the data shape. Change the schema and the compiler tells you everywhere that needs updating.
@@ -110,7 +110,7 @@ import {
   syncChannel,
   type SyncEvent,
   type Post,
-} from "@template/shared";
+} from "@wanshitong/shared";
 import { router, publicProcedure, protectedProcedure } from "../trpc.js";
 import { posts } from "../db/schema.js";
 import { iterateEvents } from "../lib/iterateEvents.js";
@@ -401,7 +401,7 @@ See [Real-Time Sync](./realtime-sync.md) for more on the subscription pattern.
 // packages/web/src/views/Posts.tsx
 import { useState } from "react";
 import { useAuth0 } from "@auth0/auth0-react";
-import { usePosts } from "@template/hooks";
+import { usePosts } from "@wanshitong/hooks";
 
 export function Posts() {
   const { isAuthenticated } = useAuth0();

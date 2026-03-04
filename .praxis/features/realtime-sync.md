@@ -119,7 +119,7 @@ Client hook type definitions reflect this: `SerializedUser` declares `createdAt:
 
 ## How to Implement for a New Entity
 
-> **Note:** The example below uses `Post`, `PostSchema`, and `CreatePostSchema` as hypothetical types. These don't exist in `@template/shared` yet -- you'd create them by following [Adding Entities](./adding-entities.md) first. The code below shows what the router and hook would look like after you've defined your entity schemas.
+> **Note:** The example below uses `Post`, `PostSchema`, and `CreatePostSchema` as hypothetical types. These don't exist in `@wanshitong/shared` yet -- you'd create them by following [Adding Entities](./adding-entities.md) first. The code below shows what the router and hook would look like after you've defined your entity schemas.
 
 ### 1. Add the subscription to your router
 
@@ -128,7 +128,7 @@ After creating your entity schemas (see [adding-entities.md](./adding-entities.m
 ```typescript
 // Create: packages/api/src/routers/post.ts
 import { tracked } from "@trpc/server";
-import { syncChannel, type SyncEvent, type Post } from "@template/shared";
+import { syncChannel, type SyncEvent, type Post } from "@wanshitong/shared";
 import { iterateEvents } from "../lib/iterateEvents.js";
 
 let eventId = 0;
@@ -199,7 +199,7 @@ function useSyncSubscription<T>(
 For a new entity, pass the corresponding subscription procedure:
 
 ```typescript
-import { useSyncSubscription } from "@template/hooks";
+import { useSyncSubscription } from "@wanshitong/hooks";
 
 useSyncSubscription<Post>(trpc.post.onSync, {
   onCreated: (post) => utils.post.list.setData(undefined, (old) => [...(old ?? []), post]),

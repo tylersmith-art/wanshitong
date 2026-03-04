@@ -1,5 +1,5 @@
 import { useRef, useEffect } from "react";
-import type { SyncEvent } from "@template/shared";
+import type { SyncEvent } from "@wanshitong/shared";
 import { trpc } from "../trpc.js";
 
 type ToastNotification = {

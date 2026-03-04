@@ -62,7 +62,7 @@ export {
 Rebuild shared:
 
 ```bash
-pnpm build --filter=@template/shared
+pnpm build --filter=@wanshitong/shared
 ```
 
 **Should the create schema include the parent ID?** Yes. The alternative is passing the parent ID as a URL/path parameter and omitting it from the body schema, but tRPC doesn't have path parameters — everything goes through input. Including it in the schema also means the client gets type-checked at compile time.
@@ -127,7 +127,7 @@ import {
   syncChannel,
   type SyncEvent,
   type Note,
-} from "@template/shared";
+} from "@wanshitong/shared";
 import { router, publicProcedure, protectedProcedure } from "../trpc.js";
 import { notes } from "../db/schema.js";
 import { iterateEvents } from "../lib/iterateEvents.js";
@@ -466,7 +466,7 @@ Sub-entity views can be standalone pages (e.g., `/users/:userId/notes`) or inlin
 
 ```tsx
 // Inside an existing view — e.g., a user detail page
-import { useNotes } from "@template/hooks";
+import { useNotes } from "@wanshitong/hooks";
 
 function UserNotes({ userId }: { userId: string }) {
   const { notes, isLoading, createNote, isCreating } = useNotes(userId);
@@ -526,7 +526,7 @@ function UserNotes({ userId }: { userId: string }) {
 ```tsx
 // packages/web/src/views/UserNotes.tsx
 import { useParams } from "react-router-dom";
-import { useNotes } from "@template/hooks";
+import { useNotes } from "@wanshitong/hooks";
 
 export function UserNotes() {
   const { userId } = useParams<{ userId: string }>();

@@ -181,7 +181,7 @@ Run `pnpm db:generate` then `pnpm db:migrate`.
 
 ```typescript
 // packages/api/src/routers/post.ts
-import { CreatePostSchema } from "@template/shared";
+import { CreatePostSchema } from "@wanshitong/shared";
 import { router, publicProcedure, protectedProcedure } from "../trpc.js";
 import { posts } from "../db/schema.js";
 

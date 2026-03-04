@@ -14,7 +14,7 @@ importers:
 
   packages/api:
     dependencies:
-      '@template/shared':
+      '@wanshitong/shared':
         specifier: workspace:*
         version: link:../shared
       '@trpc/server':
@@ -100,10 +100,10 @@ importers:
         specifier: ^19.0.0
         version: 19.2.4
     devDependencies:
-      '@template/api':
+      '@wanshitong/api':
         specifier: workspace:*
         version: link:../api
-      '@template/shared':
+      '@wanshitong/shared':
         specifier: workspace:*
         version: link:../shared
       '@types/react':
@@ -124,10 +124,10 @@ importers:
       '@tanstack/react-query':
         specifier: ^5.62.0
         version: 5.90.20(react@19.1.0)
-      '@template/hooks':
+      '@wanshitong/hooks':
         specifier: workspace:*
         version: link:../hooks
-      '@template/shared':
+      '@wanshitong/shared':
         specifier: workspace:*
         version: link:../shared
       '@trpc/client':
@@ -182,7 +182,7 @@ importers:
         specifier: ~4.16.0
         version: 4.16.0(react-native@0.81.5(@babel/core@7.29.0)(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)
     devDependencies:
-      '@template/api':
+      '@wanshitong/api':
         specifier: workspace:*
         version: link:../api
       '@types/react':
@@ -210,7 +210,7 @@ importers:
       '@auth0/auth0-react':
         specifier: ^2.2.0
         version: 2.13.0(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
-      '@template/hooks':
+      '@wanshitong/hooks':
         specifier: workspace:*
         version: link:../hooks
       react:
@@ -226,10 +226,10 @@ importers:
       '@tailwindcss/vite':
         specifier: ^4.0.0
         version: 4.1.18(vite@6.4.1(@types/node@25.2.2)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))
-      '@template/api':
+      '@wanshitong/api':
         specifier: workspace:*
         version: link:../api
-      '@template/shared':
+      '@wanshitong/shared':
         specifier: workspace:*
         version: link:../shared
       '@types/react':

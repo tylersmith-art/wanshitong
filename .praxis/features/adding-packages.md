@@ -30,7 +30,7 @@ shared  ──→  mobile
 
 `shared` has no internal dependencies — it's the leaf. Everything else depends on it. `hooks` lists both `shared` and `api` as **devDependencies** — it only uses them for types at build time, not at runtime. `web` and `mobile` depend on `hooks` as a runtime dependency.
 
-> **Client type export.** `api` exposes a `./client` subpath export (`@template/api/client`) that re-exports `AppRouter` without pulling in the server startup code from `src/index.ts`. `hooks/src/trpc.ts` imports from this subpath instead of reaching into `api` internals. The `./client` entry is defined in `api/package.json` under `exports` and backed by `src/client.ts`, which is a types-only barrel.
+> **Client type export.** `api` exposes a `./client` subpath export (`@wanshitong/api/client`) that re-exports `AppRouter` without pulling in the server startup code from `src/index.ts`. `hooks/src/trpc.ts` imports from this subpath instead of reaching into `api` internals. The `./client` entry is defined in `api/package.json` under `exports` and backed by `src/client.ts`, which is a types-only barrel.
 
 ### How turbo knows what to build first
 
@@ -48,7 +48,7 @@ The `^build` means "build all packages I depend on before building me." So `pnpm
 
 Two mechanisms work together:
 
-1. **`workspace:*` in package.json** — pnpm symlinks the package into `node_modules`, so `import { UserSchema } from "@template/shared"` resolves at runtime.
+1. **`workspace:*` in package.json** — pnpm symlinks the package into `node_modules`, so `import { UserSchema } from "@wanshitong/shared"` resolves at runtime.
 
 2. **`references` in tsconfig.json** — TypeScript follows project references for type checking, so you get autocomplete and compile errors across packages.
 
@@ -67,10 +67,10 @@ Each package has an `src/index.ts` that re-exports its public API. Consumers imp
 
 ```typescript
 // YES — import from the package
-import { UserSchema, type User } from "@template/shared";
+import { UserSchema, type User } from "@wanshitong/shared";
 
 // NO — reaching into internal files
-import { UserSchema } from "@template/shared/src/schemas/user.js";
+import { UserSchema } from "@wanshitong/shared/src/schemas/user.js";
 ```
 
 The `exports` field in package.json maps the package name to the built output:
@@ -98,7 +98,7 @@ mkdir -p packages/worker/src
 ```json
 // packages/worker/package.json
 {
-  "name": "@template/worker",
+  "name": "@wanshitong/worker",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -117,7 +117,7 @@ mkdir -p packages/worker/src
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@template/shared": "workspace:*"
+    "@wanshitong/shared": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.7.0",
@@ -129,8 +129,8 @@ mkdir -p packages/worker/src
 Key details:
 - **`"type": "module"`** — all packages use ESM
 - **`"private": true`** — monorepo packages aren't published to npm
-- **`workspace:*`** — tells pnpm to use the local version of `@template/shared`
-- **`exports`** — required for other packages to import from `@template/worker`
+- **`workspace:*`** — tells pnpm to use the local version of `@wanshitong/shared`
+- **`exports`** — required for other packages to import from `@wanshitong/worker`
 
 > **Exception: Expo apps** — The `mobile` package does not follow the standard ESM setup. Expo apps use their own conventions: no `"type": "module"`, no `"exports"` field, no `"build"` script, and `tsconfig.json` extends `expo/tsconfig.base` instead of the monorepo base. This is expected — Expo's toolchain handles bundling and TypeScript differently from Node.js library packages.
 
@@ -155,7 +155,7 @@ Key details:
 Key details:
 - **`extends`** — inherits strict mode, ESM, source maps from `tsconfig.base.json`
 - **`composite: true`** — only required for library packages that other packages import from (e.g., `shared`, or a `worker` that `api` imports from). Frontend apps like `web` and `mobile` don't need it since nothing imports from them — `web` correctly omits it.
-- **`references`** — list every internal package this one imports from. If you use `@template/shared`, add `{ "path": "../shared" }`.
+- **`references`** — list every internal package this one imports from. If you use `@wanshitong/shared`, add `{ "path": "../shared" }`.
 
 ### 3. Create the barrel export
 
@@ -232,7 +232,7 @@ Examples: `api`, a background `worker`, a `cron` service.
 }
 ```
 
-> **Exception:** `api` has `composite: true` because it exports types via its `./client` subpath (`@template/api/client`). If your server package similarly exposes types consumed by other packages, it needs `composite: true` too.
+> **Exception:** `api` has `composite: true` because it exports types via its `./client` subpath (`@wanshitong/api/client`). If your server package similarly exposes types consumed by other packages, it needs `composite: true` too.
 
 - **`dev` script uses `tsx watch`** — hot-reloads on file changes
 - **`start` script uses `node dist/index.js`** — for production
@@ -266,7 +266,7 @@ Examples: `web`, another SPA for a different audience.
 
 ```json
 "dependencies": {
-  "@template/shared": "workspace:*"
+  "@wanshitong/shared": "workspace:*"
 }
 ```
 
@@ -287,7 +287,7 @@ Examples: `web`, another SPA for a different audience.
 ```json
 // packages/api/package.json
 "dependencies": {
-  "@template/worker": "workspace:*"
+  "@wanshitong/worker": "workspace:*"
 }
 ```
 
@@ -348,7 +348,7 @@ If your package has a custom script (e.g., `db:generate` for a package with its 
 }
 ```
 
-Then run it from the root: `turbo worker:process --filter=@template/worker`.
+Then run it from the root: `turbo worker:process --filter=@wanshitong/worker`.
 
 ---
 

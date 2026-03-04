@@ -1,11 +1,11 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: <REPO_NAME>-ui-service
+  name: wanshitong-ui-service
 spec:
   type: ClusterIP
   selector:
-    app: <REPO_NAME>-ui
+    app: wanshitong-ui
   ports:
     - port: 80
       targetPort: 3000
@@ -13,12 +13,12 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: <REPO_NAME>-ui
+  name: wanshitong-ui
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: <REPO_NAME>-ui
+      app: wanshitong-ui
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -27,10 +27,10 @@ spec:
   template:
     metadata:
       labels:
-        app: <REPO_NAME>-ui
+        app: wanshitong-ui
     spec:
       containers:
-        - name: <REPO_NAME>-ui
+        - name: wanshitong-ui
           image: <IMAGE_NAME>
           imagePullPolicy: Never
           ports:

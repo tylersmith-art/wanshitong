@@ -1,8 +1,8 @@
 {
   "expo": {
-    "name": "TEMPLATE_APP_NAME",
-    "slug": "TEMPLATE_SLUG",
-    "scheme": "TEMPLATE_SCHEME",
+    "name": "Wanshitong",
+    "slug": "wanshitong-mobile",
+    "scheme": "wanshitong",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -12,7 +12,7 @@
       "policy": "appVersion"
     },
     "updates": {
-      "url": "https://u.expo.dev/TEMPLATE_EAS_PROJECT_ID",
+      "url": "https://u.expo.dev/51255307-c8fe-4304-a5cd-323c327aae2e",
       "requestHeaders": {
         "expo-channel-name": "production"
       }
@@ -24,7 +24,7 @@
     },
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "art.tylermakes.TEMPLATE_BUNDLE",
+      "bundleIdentifier": "art.tylermakes.wanshitong",
       "infoPlist": {
         "NSHealthShareUsageDescription": "This app reads your health data to track your activity.",
         "NSHealthUpdateUsageDescription": "This app writes workout data to HealthKit.",
@@ -40,7 +40,11 @@
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
-      }
+      },
+      "permissions": [
+        "android.permission.READ_CALENDAR",
+        "android.permission.WRITE_CALENDAR"
+      ]
     },
     "plugins": [
       "expo-router",
@@ -62,13 +66,15 @@
       ]
     ],
     "extra": {
-      "apiUrl": "https://TEMPLATE_DOMAIN/api/trpc",
-      "auth0Domain": "TEMPLATE_AUTH0_DOMAIN",
-      "auth0ClientId": "TEMPLATE_AUTH0_CLIENT_ID",
-      "auth0Audience": "TEMPLATE_AUTH0_AUDIENCE",
+      "apiUrl": "https://wanshitong.tylermakes.art/api/trpc",
+      "auth0Domain": "dev-ahpx1ju0tyq2wgl7.us.auth0.com",
+      "auth0ClientId": "NBztaOPRyyh4LJt5cBOQqj6jzD3DfFa9",
+      "auth0Audience": "https://homebase-shared.tylermakes.art",
       "eas": {
-        "projectId": "TEMPLATE_EAS_PROJECT_ID"
-      }
-    }
+        "projectId": "51255307-c8fe-4304-a5cd-323c327aae2e"
+      },
+      "router": {}
+    },
+    "owner": "tylerrsmith"
   }
 }

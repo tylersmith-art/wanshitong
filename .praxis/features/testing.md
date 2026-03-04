@@ -1,6 +1,6 @@
 # Testing
 
-> **Note:** `@template` is a placeholder package scope. When you run `scripts/init.sh <project-name>`, it replaces every `@template/` reference (including in these docs) with `@<project-name>/`.
+> **Note:** `@template` is a placeholder package scope. When you run `scripts/init.sh <project-name>`, it replaces every `@wanshitong/` reference (including in these docs) with `@<project-name>/`.
 
 Vitest runs tests in the `api` and `shared` packages. Tests live next to the code they test (`*.test.ts`). The `hooks` and `web` packages have placeholder scripts (React test infra can be added later).
 
@@ -10,7 +10,7 @@ Vitest runs tests in the `api` and `shared` packages. Tests live next to the cod
 pnpm test                              # all packages
 cd packages/api && pnpm test           # just API
 cd packages/shared && pnpm test        # just shared schemas
-pnpm --filter @template/api test       # alternative filter syntax
+pnpm --filter @wanshitong/api test       # alternative filter syntax
 ```
 
 Vitest runs in single-run mode (`vitest run`). For watch mode during development:

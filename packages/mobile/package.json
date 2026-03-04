@@ -1,5 +1,5 @@
 {
-  "name": "@template/mobile",
+  "name": "@wanshitong/mobile",
   "version": "0.0.1",
   "private": true,
   "main": "expo-router/entry",
@@ -15,8 +15,8 @@
     "@expo/metro-runtime": "~6.1.2",
     "@kingstinct/react-native-healthkit": "^13.0.0",
     "@tanstack/react-query": "^5.62.0",
-    "@template/hooks": "workspace:*",
-    "@template/shared": "workspace:*",
+    "@wanshitong/hooks": "workspace:*",
+    "@wanshitong/shared": "workspace:*",
     "@trpc/client": "^11.0.0",
     "expo": "~54.0.33",
     "expo-auth-session": "~7.0.10",
@@ -36,7 +36,7 @@
     "react-native-screens": "~4.16.0"
   },
   "devDependencies": {
-    "@template/api": "workspace:*",
+    "@wanshitong/api": "workspace:*",
     "@types/react": "~19.1.0",
     "typescript": "~5.9.2"
   }

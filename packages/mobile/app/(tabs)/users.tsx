@@ -7,7 +7,7 @@ import {
   FlatList,
   StyleSheet,
 } from "react-native";
-import { useUsers } from "@template/hooks";
+import { useUsers } from "@wanshitong/hooks";
 import { useAuth } from "../../src/contexts/AuthContext";
 
 export default function UsersScreen() {

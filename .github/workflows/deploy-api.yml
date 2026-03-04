@@ -39,7 +39,7 @@ jobs:
 
       - name: Deploy to Kubernetes
         run: |
-          sed -e "s|<REPO_NAME>|${{ env.REPO_NAME }}|g" \
+          sed -e "s|wanshitong|${{ env.REPO_NAME }}|g" \
               -e "s|<IMAGE_NAME>|${{ env.REPO_NAME }}-api:${{ env.GIT_SHA }}|g" \
               .k8s/api-deployment.yml | kubectl apply -f -
 
