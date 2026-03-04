@@ -40,6 +40,18 @@ export function NavBar() {
                 Orgs
               </Link>
               <Link
+                to="/specs"
+                className={`no-underline font-medium ${isActive("/specs") ? "text-gray-900" : "text-gray-500"}`}
+              >
+                Specs
+              </Link>
+              <Link
+                to="/api-keys"
+                className={`no-underline font-medium ${isActive("/api-keys") ? "text-gray-900" : "text-gray-500"}`}
+              >
+                API Keys
+              </Link>
+              <Link
                 to="/profile"
                 className={`no-underline font-medium ${isActive("/profile") ? "text-gray-900" : "text-gray-500"}`}
               >

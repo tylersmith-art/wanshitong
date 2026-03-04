@@ -3,6 +3,8 @@ export { TRPCProvider } from "./providers/TRPCProvider.js";
 export { useUsers } from "./hooks/useUsers.js";
 export { useOrgs } from "./hooks/useOrgs.js";
 export { useOrgMembers } from "./hooks/useOrgMembers.js";
+export { useApiKeys } from "./hooks/useApiKeys.js";
+export { useSpecs } from "./hooks/useSpecs.js";
 export { useNotifications } from "./hooks/useNotifications.js";
 export { useNotificationToast } from "./hooks/useNotificationToast.js";
 export { useSessionSync } from "./hooks/useSessionSync.js";

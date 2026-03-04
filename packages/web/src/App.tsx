@@ -8,6 +8,10 @@ import { Profile } from "./views/Profile.js";
 import { Users } from "./views/Users.js";
 import { Organizations } from "./views/Organizations.js";
 import { OrgDetail } from "./views/OrgDetail.js";
+import { ApiKeys } from "./views/ApiKeys.js";
+import { Specs } from "./views/Specs.js";
+import { SpecDetail } from "./views/SpecDetail.js";
+import { SpecEditor } from "./views/SpecEditor.js";
 import { Admin } from "./views/Admin.js";
 import { AuthGuard } from "./components/AuthGuard.js";
 
@@ -61,6 +65,46 @@ export function App() {
             element={
               <AuthGuard>
                 <OrgDetail />
+              </AuthGuard>
+            }
+          />
+          <Route
+            path="/api-keys"
+            element={
+              <AuthGuard>
+                <ApiKeys />
+              </AuthGuard>
+            }
+          />
+          <Route
+            path="/specs"
+            element={
+              <AuthGuard>
+                <Specs />
+              </AuthGuard>
+            }
+          />
+          <Route
+            path="/specs/new"
+            element={
+              <AuthGuard>
+                <SpecEditor />
+              </AuthGuard>
+            }
+          />
+          <Route
+            path="/specs/:id"
+            element={
+              <AuthGuard>
+                <SpecDetail />
+              </AuthGuard>
+            }
+          />
+          <Route
+            path="/specs/:id/edit"
+            element={
+              <AuthGuard>
+                <SpecEditor />
               </AuthGuard>
             }
           />
