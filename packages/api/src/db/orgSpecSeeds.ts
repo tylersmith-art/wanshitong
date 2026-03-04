@@ -2213,4 +2213,1994 @@ This mirrors exactly what CI runs.
 - **Rollout timeout (120s)?** Usually means the pod is crash-looping. Check logs with \\\`--previous\\\` flag to see the crash output.
 - **K8s secret issues?** The env file must exist on the runner. If it's missing, the init script wasn't run for this project.`,
   },
+  {
+    name: 'Adding an External Service',
+    description:
+      'How to integrate any external service using the adapter pattern. Covers adapter types, factory functions, console/real implementations, env var config, and testing.',
+    content: `# Adding an External Service
+
+How to integrate any external service (email, payments, storage, SMS, AI, etc.) using the adapter pattern. The adapter abstracts the provider so business logic never depends on a specific vendor. Providers can be swapped via env vars, database config, or at call time — without changing any calling code.
+
+This guide uses email as the example. The pattern is the same for any external service.
+
+## The Rule
+
+**Every external service gets an adapter.** Even if you're only using one provider today. The adapter is a TypeScript type. Business logic calls the adapter. The adapter calls the provider. This is non-negotiable — it's how you avoid vendor lock-in and keep tests fast.
+
+\\\`\\\`\\\`
+Business logic (routers, jobs)
+  → calls adapter interface
+    → adapter implementation calls provider SDK (SendGrid, Stripe, S3, etc.)
+\\\`\\\`\\\`
+
+Adapters use factory functions, not classes — see the Coding Guidelines spec for why.
+
+## Overview of Files You'll Create
+
+\\\`\\\`\\\`
+packages/api/src/services/email/
+  types.ts           ← Adapter type + shared types
+  index.ts           ← Factory that returns the right implementation
+  sendgrid.ts        ← SendGrid implementation
+  console.ts         ← Dev/test implementation (logs to console)
+  resend.ts          ← (future) Another provider, no other code changes
+\\\`\\\`\\\`
+
+---
+
+## Step 1: Define the Adapter Type
+
+Create the adapter type file. This is the contract. Every implementation must satisfy it. Business logic only imports types and the factory -- never a specific provider.
+
+\\\`\\\`\\\`typescript
+// Create: packages/api/src/services/email/types.ts
+
+export type SendEmailParams = {
+  to: string;
+  subject: string;
+  html: string;
+  replyTo?: string;
+};
+
+export type SendEmailResult = {
+  success: boolean;
+  messageId?: string;
+  error?: string;
+};
+
+export type EmailAdapter = {
+  send(params: SendEmailParams): Promise<SendEmailResult>;
+};
+\\\`\\\`\\\`
+
+**Guidelines for the type:**
+- Keep it minimal — only the operations your app actually uses
+- Use your own types for params and results, not the provider's types
+- The type should make sense if you read it without knowing which provider backs it
+- Don't leak provider-specific concepts (e.g., don't put "SendGrid template IDs" in the shared type)
+
+---
+
+## Step 2: Build the Dev/Console Implementation
+
+Create this file first. This implementation logs to the console instead of sending real emails. It's what you use in development and tests.
+
+\\\`\\\`\\\`typescript
+// Create: packages/api/src/services/email/console.ts
+import { getLogger } from "../../lib/logger.js";
+import type { EmailAdapter } from "./types.js";
+
+export function createConsoleEmailAdapter(): EmailAdapter {
+  return {
+    async send(params) {
+      getLogger().info(
+        { to: params.to, subject: params.subject },
+        "Email sent (console adapter — not actually delivered)",
+      );
+      return { success: true, messageId: \\\`console-\\\${Date.now()}\\\` };
+    },
+  };
+}
+\\\`\\\`\\\`
+
+This means you can build and test the entire email flow before you have a provider account or API key.
+
+---
+
+## Step 3: Build the Real Implementation
+
+Create the provider-specific implementation file.
+
+\\\`\\\`\\\`typescript
+// Create: packages/api/src/services/email/sendgrid.ts
+import { getLogger } from "../../lib/logger.js";
+import type { EmailAdapter } from "./types.js";
+
+export function createSendGridAdapter(config: {
+  apiKey: string;
+  fromAddress: string;
+}): EmailAdapter {
+  return {
+    async send(params) {
+      try {
+        const response = await fetch("https://api.sendgrid.com/v3/mail/send", {
+          method: "POST",
+          headers: {
+            Authorization: \\\`Bearer \\\${config.apiKey}\\\`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            personalizations: [{ to: [{ email: params.to }] }],
+            from: { email: config.fromAddress },
+            subject: params.subject,
+            content: [{ type: "text/html", value: params.html }],
+            ...(params.replyTo && { reply_to: { email: params.replyTo } }),
+          }),
+        });
+
+        if (!response.ok) {
+          const body = await response.text();
+          getLogger().error({ status: response.status, body }, "SendGrid API error");
+          return { success: false, error: \\\`SendGrid error: \\\${response.status}\\\` };
+        }
+
+        const messageId = response.headers.get("x-message-id") ?? undefined;
+        return { success: true, messageId };
+      } catch (err) {
+        getLogger().error({ err }, "SendGrid request failed");
+        return { success: false, error: (err as Error).message };
+      }
+    },
+  };
+}
+\\\`\\\`\\\`
+
+**Key patterns:**
+- Factory takes config — never reads env vars directly (the top-level factory does that)
+- Returns a result object instead of throwing — let the caller decide how to handle failure
+- Logs errors with structured data through Pino
+- Uses only \\\`fetch\\\` — no provider SDK required (though you can use one if the API is complex)
+- Config is available via closure — no \\\`this\\\`, no private fields
+
+---
+
+## Step 4: Create the Factory
+
+Create the factory file. The factory decides which implementation to use. It reads configuration from env vars, but could also read from the database or accept runtime overrides.
+
+\\\`\\\`\\\`typescript
+// Create: packages/api/src/services/email/index.ts
+import { getEnv } from "../../lib/env.js";
+import { getLogger } from "../../lib/logger.js";
+import type { EmailAdapter } from "./types.js";
+import { createConsoleEmailAdapter } from "./console.js";
+import { createSendGridAdapter } from "./sendgrid.js";
+
+export type { EmailAdapter, SendEmailParams, SendEmailResult } from "./types.js";
+
+let instance: EmailAdapter | null = null;
+
+export function getEmailAdapter(): EmailAdapter {
+  if (instance) return instance;
+
+  const env = getEnv();
+  const provider = env.EMAIL_PROVIDER;  // "sendgrid" | "console" | undefined
+
+  switch (provider) {
+    case "sendgrid":
+      getLogger().info("Email adapter: SendGrid");
+      instance = createSendGridAdapter({
+        apiKey: env.SENDGRID_API_KEY!,
+        fromAddress: env.EMAIL_FROM!,
+      });
+      break;
+
+    default:
+      getLogger().info("Email adapter: console (no EMAIL_PROVIDER set)");
+      instance = createConsoleEmailAdapter();
+      break;
+  }
+
+  return instance;
+}
+
+// For tests: override the adapter
+export function setEmailAdapter(adapter: EmailAdapter): void {
+  instance = adapter;
+}
+
+// For tests: reset to force re-initialization
+export function resetEmailAdapter(): void {
+  instance = null;
+}
+\\\`\\\`\\\`
+
+---
+
+## Step 5: Add the Env Vars
+
+Add the following fields to the existing env schema.
+
+\\\`\\\`\\\`typescript
+// Add to the env schema in your env validation module
+const envSchema = z.object({
+  // ...existing vars...
+  EMAIL_PROVIDER: z.string().optional(),     // "sendgrid", "resend", etc. Falls back to console.
+  SENDGRID_API_KEY: z.string().optional(),   // Required when EMAIL_PROVIDER=sendgrid
+  EMAIL_FROM: z.string().optional(),         // Required when EMAIL_PROVIDER is set
+});
+\\\`\\\`\\\`
+
+Keep provider-specific vars optional at the Zod level. Validate them inside the factory instead — this way the app boots fine in development without email credentials:
+
+\\\`\\\`\\\`typescript
+// In the factory switch case:
+case "sendgrid":
+  if (!env.SENDGRID_API_KEY || !env.EMAIL_FROM) {
+    throw new Error("EMAIL_PROVIDER=sendgrid requires SENDGRID_API_KEY and EMAIL_FROM");
+  }
+  instance = createSendGridAdapter({ apiKey: env.SENDGRID_API_KEY, fromAddress: env.EMAIL_FROM });
+  break;
+\\\`\\\`\\\`
+
+---
+
+## Step 6: Use the Adapter
+
+### From a tRPC procedure
+
+Add a procedure like this to an existing router.
+
+\\\`\\\`\\\`typescript
+// Add to your user router
+import { getEmailAdapter } from "../services/email/index.js";
+
+sendWelcome: protectedProcedure
+  .input(z.object({ email: z.string().email() }))
+  .mutation(async ({ input }) => {
+    const email = getEmailAdapter();
+    const result = await email.send({
+      to: input.email,
+      subject: "Welcome!",
+      html: "<h1>Welcome to the app</h1>",
+    });
+
+    if (!result.success) {
+      throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Failed to send email" });
+    }
+
+    return { messageId: result.messageId };
+  }),
+\\\`\\\`\\\`
+
+### From a background job (recommended for non-blocking sends)
+
+Create a job handler file for the email send.
+
+\\\`\\\`\\\`typescript
+// Create a job handler for sending welcome emails
+import type PgBoss from "pg-boss";
+import { getLogger } from "../../lib/logger.js";
+import { getEmailAdapter } from "../../services/email/index.js";
+
+export const SEND_WELCOME_EMAIL = "send-welcome-email";
+
+type Payload = {
+  to: string;
+  name: string;
+};
+
+export async function registerSendWelcomeEmailHandler(boss: PgBoss): Promise<void> {
+  await boss.work(SEND_WELCOME_EMAIL, async ([job]) => {
+    const { to, name } = job.data as Payload;
+    const email = getEmailAdapter();
+
+    const result = await email.send({
+      to,
+      subject: "Welcome!",
+      html: \\\`<h1>Hello \\\${name}</h1><p>Welcome to the app.</p>\\\`,
+    });
+
+    if (!result.success) {
+      getLogger().error({ to, error: result.error }, "Welcome email failed");
+      throw new Error(result.error);  // pg-boss will retry
+    }
+
+    getLogger().info({ to, messageId: result.messageId }, "Welcome email sent");
+  });
+}
+\\\`\\\`\\\`
+
+Then add the enqueue call to your mutation:
+
+\\\`\\\`\\\`typescript
+// Add to your router file:
+import { enqueueJob } from "../jobs/index.js";
+import { SEND_WELCOME_EMAIL } from "../jobs/handlers/sendWelcomeEmail.js";
+
+create: protectedProcedure
+  .input(CreateUserSchema)
+  .mutation(async ({ ctx, input }) => {
+    const [user] = await ctx.db.insert(users).values({ ...input, role: "user" }).returning();
+
+    // Non-blocking — returns immediately, email sends in background
+    await enqueueJob(SEND_WELCOME_EMAIL, { to: user.email, name: user.name });
+
+    return user;
+  }),
+\\\`\\\`\\\`
+
+---
+
+## Step 7: Database-Driven Configuration (When Needed)
+
+Sometimes the provider or its config comes from the database — e.g., per-tenant email settings in a multi-tenant app, or admin-configurable SMTP settings.
+
+Add an overload to the factory file that accepts a config parameter:
+
+\\\`\\\`\\\`typescript
+// Add to: packages/api/src/services/email/index.ts
+
+export function createEmailAdapter(config: {
+  provider: string;
+  apiKey: string;
+  fromAddress: string;
+}): EmailAdapter {
+  switch (config.provider) {
+    case "sendgrid":
+      return createSendGridAdapter({ apiKey: config.apiKey, fromAddress: config.fromAddress });
+    default:
+      return createConsoleEmailAdapter();
+  }
+}
+\\\`\\\`\\\`
+
+Then in your procedure:
+
+\\\`\\\`\\\`typescript
+sendNotification: protectedProcedure.mutation(async ({ ctx }) => {
+  // Read config from DB (e.g., org-level settings)
+  const [settings] = await ctx.db
+    .select()
+    .from(orgSettings)
+    .where(eq(orgSettings.orgId, ctx.user.orgId))
+    .limit(1);
+
+  const email = createEmailAdapter({
+    provider: settings.emailProvider,
+    apiKey: settings.emailApiKey,
+    fromAddress: settings.emailFrom,
+  });
+
+  await email.send({ to: "...", subject: "...", html: "..." });
+}),
+\\\`\\\`\\\`
+
+This way the same adapter type works whether config comes from env vars (singleton via \\\`getEmailAdapter()\\\`), the database (per-request via \\\`createEmailAdapter()\\\`), or passed in directly.
+
+---
+
+## Step 8: Adding a New Provider Later
+
+This is the payoff. When you switch from SendGrid to Resend, create one new file and change one env var:
+
+\\\`\\\`\\\`typescript
+// Create: packages/api/src/services/email/resend.ts
+import { getLogger } from "../../lib/logger.js";
+import type { EmailAdapter } from "./types.js";
+
+export function createResendAdapter(config: {
+  apiKey: string;
+  fromAddress: string;
+}): EmailAdapter {
+  return {
+    async send(params) {
+      try {
+        const response = await fetch("https://api.resend.com/emails", {
+          method: "POST",
+          headers: {
+            Authorization: \\\`Bearer \\\${config.apiKey}\\\`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            from: config.fromAddress,
+            to: params.to,
+            subject: params.subject,
+            html: params.html,
+          }),
+        });
+
+        if (!response.ok) {
+          const body = await response.text();
+          getLogger().error({ status: response.status, body }, "Resend API error");
+          return { success: false, error: \\\`Resend error: \\\${response.status}\\\` };
+        }
+
+        const data = await response.json();
+        return { success: true, messageId: data.id };
+      } catch (err) {
+        getLogger().error({ err }, "Resend request failed");
+        return { success: false, error: (err as Error).message };
+      }
+    },
+  };
+}
+\\\`\\\`\\\`
+
+Then add the new case to the factory:
+
+\\\`\\\`\\\`typescript
+// Extend the switch statement in the factory
+case "resend":
+  getLogger().info("Email adapter: Resend");
+  instance = createResendAdapter({ apiKey: env.RESEND_API_KEY!, fromAddress: env.EMAIL_FROM! });
+  break;
+\\\`\\\`\\\`
+
+Change the env var:
+
+\\\`\\\`\\\`
+EMAIL_PROVIDER=resend
+RESEND_API_KEY=re_...
+\\\`\\\`\\\`
+
+No other code changes. Every mutation, job, and test that uses \\\`getEmailAdapter()\\\` now sends through Resend.
+
+---
+
+## How to Test
+
+The adapter pattern makes testing trivial. You never mock HTTP calls or provider SDKs — you mock the adapter.
+
+### Unit test with a mock adapter
+
+\\\`\\\`\\\`typescript
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { setEmailAdapter, resetEmailAdapter } from "../services/email/index.js";
+import type { EmailAdapter } from "../services/email/types.js";
+
+const mockEmail: EmailAdapter = {
+  send: vi.fn().mockResolvedValue({ success: true, messageId: "test-123" }),
+};
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  setEmailAdapter(mockEmail);
+});
+
+afterAll(() => resetEmailAdapter());
+
+it("sends welcome email on user create", async () => {
+  const caller = appRouter.createCaller({
+    user: { sub: "u1", email: "test@test.com" },
+    db: mockDb as any,
+    pubsub: mockPubsub as any,
+  });
+
+  await caller.user.sendWelcome({ email: "new@test.com" });
+
+  expect(mockEmail.send).toHaveBeenCalledWith(
+    expect.objectContaining({ to: "new@test.com", subject: "Welcome!" }),
+  );
+});
+
+it("throws on email failure", async () => {
+  vi.mocked(mockEmail.send).mockResolvedValueOnce({ success: false, error: "API down" });
+
+  const caller = appRouter.createCaller({ user: mockUser, db: mockDb as any, pubsub: mockPubsub as any });
+  await expect(caller.user.sendWelcome({ email: "new@test.com" })).rejects.toThrow("INTERNAL_SERVER_ERROR");
+});
+\\\`\\\`\\\`
+
+### Testing a specific adapter implementation
+
+\\\`\\\`\\\`typescript
+import { describe, it, expect, vi } from "vitest";
+import { createSendGridAdapter } from "./sendgrid.js";
+
+it("calls SendGrid API with correct payload", async () => {
+  const mockFetch = vi.fn().mockResolvedValue({
+    ok: true,
+    headers: new Headers({ "x-message-id": "sg-123" }),
+  });
+  vi.stubGlobal("fetch", mockFetch);
+
+  const adapter = createSendGridAdapter({ apiKey: "test-key", fromAddress: "from@test.com" });
+  const result = await adapter.send({ to: "to@test.com", subject: "Hi", html: "<p>Hello</p>" });
+
+  expect(result).toEqual({ success: true, messageId: "sg-123" });
+  expect(mockFetch).toHaveBeenCalledWith(
+    "https://api.sendgrid.com/v3/mail/send",
+    expect.objectContaining({ method: "POST" }),
+  );
+
+  vi.unstubAllGlobals();
+});
+\\\`\\\`\\\`
+
+---
+
+## How to Debug
+
+- **Console adapter being used in production?** Check that \\\`EMAIL_PROVIDER\\\` is set in your env. If it's missing or empty, the factory defaults to console.
+- **"SENDGRID_API_KEY is required" at startup?** You set \\\`EMAIL_PROVIDER=sendgrid\\\` but didn't provide the API key. Either set the key or remove \\\`EMAIL_PROVIDER\\\` to use the console adapter.
+- **Email sent but not received?** Check the adapter's return value — \\\`success: true\\\` only means the API accepted the request. Check the provider's dashboard for delivery status. Also check spam folders.
+- **Wrong provider being used?** The factory caches the adapter as a singleton. If you changed env vars after the first call, the old adapter is still cached. Restart the server.
+- **Need to test with real emails in staging?** Set \\\`EMAIL_PROVIDER=sendgrid\\\` in the staging env. The same code, different config.
+
+---
+
+## Checklist
+
+- [ ] Adapter type in \\\`services/<name>/types.ts\\\` with params, result, and adapter types
+- [ ] Console/dev factory that logs instead of calling the real service
+- [ ] Real factory with config accepted via parameter (closure, not class)
+- [ ] Top-level factory in \\\`services/<name>/index.ts\\\` with \\\`get<Name>Adapter()\\\`, \\\`set<Name>Adapter()\\\`, \\\`reset<Name>Adapter()\\\`
+- [ ] Provider-specific env vars added to env schema (optional at Zod level, validated in factory)
+- [ ] Business logic calls the adapter, never the provider directly
+- [ ] Heavy operations routed through background jobs (not blocking requests)
+- [ ] Tests mock the adapter type, not the provider SDK
+- [ ] Provider swap requires only: one new file + one factory case + env var change
+
+---
+
+## Applying This Pattern to Other Services
+
+| Service | Adapter Methods | Implementations |
+|---|---|---|
+| **Payments** | \\\`createCharge()\\\`, \\\`refund()\\\`, \\\`getBalance()\\\` | Stripe, Square, console |
+| **File Storage** | \\\`upload()\\\`, \\\`download()\\\`, \\\`delete()\\\`, \\\`getUrl()\\\` | S3, GCS, local filesystem |
+| **SMS** | \\\`send()\\\` | Twilio, Vonage, console |
+| **Push Notifications** | \\\`send()\\\`, \\\`sendBatch()\\\` | Expo Push, Firebase, console |
+| **AI/LLM** | \\\`complete()\\\`, \\\`embed()\\\` | OpenAI, Anthropic, local/mock |
+| **Search** | \\\`index()\\\`, \\\`search()\\\`, \\\`delete()\\\` | Algolia, Meilisearch, Postgres full-text |
+
+The structure is always the same:
+\\\`\\\`\\\`
+services/<name>/
+  types.ts      ← adapter type
+  index.ts      ← factory
+  console.ts    ← dev/test factory
+  <provider>.ts ← real factory(s)
+\\\`\\\`\\\``,
+  },
+  {
+    name: 'Adding Scheduled Jobs',
+    description:
+      'How to add recurring work that runs on a schedule using pg-boss cron scheduling. Covers cron expressions, idempotency, retries, dead-letter queues, and monitoring.',
+    content: `# Adding a Scheduled Job
+
+How to add recurring work that runs on a schedule — daily report emails, hourly data syncs, nightly cleanup of expired records, periodic health checks against external APIs. Uses pg-boss's built-in cron scheduling, which runs inside the existing API process with no extra infrastructure.
+
+This guide builds on the Background Jobs spec. If you haven't read that yet, start there — it covers how pg-boss is wired up, how to create handlers, and how to enqueue one-off jobs. This guide covers the parts that are different for scheduled work: cron expressions, idempotency, monitoring, and cleanup.
+
+This guide uses "a nightly job that deletes users who haven't logged in for 90 days" as the example. Replace with your use case.
+
+## How pg-boss Scheduling Works
+
+pg-boss has a built-in cron scheduler. When you call \\\`boss.schedule()\\\`, it stores the schedule in a \\\`pgboss.schedule\\\` table. A clock monitor inside pg-boss checks this table and automatically enqueues a job at each cron tick. You register a \\\`work()\\\` handler for the same job name, and it processes each enqueued instance.
+
+\\\`\\\`\\\`
+boss.schedule("delete-stale-users", "0 3 * * *")
+  → pg-boss clock monitor fires at 3:00 AM
+    → enqueues a job named "delete-stale-users"
+      → your work() handler picks it up and runs
+\\\`\\\`\\\`
+
+Key behaviors:
+- Schedules survive server restarts — they're stored in Postgres
+- If the server is down when a cron tick fires, pg-boss enqueues the job when it starts back up (within one cron interval)
+- On multi-instance deployments, pg-boss leader election ensures only one instance runs the scheduler — no duplicate jobs
+- \\\`schedule()\\\` is idempotent — calling it again with the same name updates the existing schedule
+
+---
+
+## Step 1: Create the Handler
+
+The handler is the same as any one-off job handler. The only difference is what's inside: scheduled jobs typically query the database, do bulk operations, and log what they did.
+
+\\\`\\\`\\\`typescript
+// Create a scheduled job handler file
+import type PgBoss from "pg-boss";
+import { eq, lt, isNotNull } from "drizzle-orm";
+import { getDb } from "../../db/index.js";
+import { users } from "../../db/schema.js";
+import { getLogger } from "../../lib/logger.js";
+
+export const DELETE_STALE_USERS = "delete-stale-users";
+
+export async function registerDeleteStaleUsersHandler(boss: PgBoss): Promise<void> {
+  await boss.work(DELETE_STALE_USERS, async ([job]) => {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - 90);
+
+    const staleUsers = await getDb()
+      .select({ id: users.id, email: users.email })
+      .from(users)
+      .where(lt(users.lastLoginAt, cutoff));
+
+    if (staleUsers.length === 0) {
+      getLogger().info({ jobId: job.id }, "No stale users to delete");
+      return;
+    }
+
+    for (const user of staleUsers) {
+      await getDb()
+        .delete(users)
+        .where(eq(users.id, user.id));
+    }
+
+    getLogger().info(
+      { jobId: job.id, count: staleUsers.length },
+      "Deleted stale users",
+    );
+  });
+
+  getLogger().info(\\\`Registered handler for \\\${DELETE_STALE_USERS}\\\`);
+}
+\\\`\\\`\\\`
+
+**Why does the handler import \\\`getDb\\\` directly instead of using \\\`ctx.db\\\`?** Scheduled jobs run outside of tRPC request context — there's no HTTP request and no \\\`ctx\\\`. The handler imports the database connection directly via \\\`getDb()\\\`. This is the one place in the codebase where that's normal.
+
+---
+
+## Step 2: Register the Handler and Schedule
+
+Add both the handler registration and the schedule call to \\\`initJobs\\\`. The schedule tells pg-boss *when* to enqueue; the handler tells it *what to do* when the job arrives.
+
+\\\`\\\`\\\`typescript
+// Add to your jobs index file
+import { registerDeleteStaleUsersHandler, DELETE_STALE_USERS }
+  from "./handlers/deleteStaleUsers.js";
+
+export async function initJobs(connectionString: string): Promise<void> {
+  boss = new PgBoss(connectionString);
+  boss.on("error", (error) => getLogger().error({ err: error }, "pg-boss error"));
+  await boss.start();
+  getLogger().info("pg-boss started");
+
+  // Create queues (required in pg-boss v10 before work()/send())
+  await boss.createQueue(EXAMPLE_JOB);
+  await boss.createQueue(DELETE_STALE_USERS);
+
+  // Register handlers
+  await registerExampleHandler(boss);
+  await registerDeleteStaleUsersHandler(boss);
+
+  // Register schedules
+  await boss.schedule(DELETE_STALE_USERS, "0 3 * * *");
+  getLogger().info("Registered schedule: delete-stale-users at 0 3 * * *");
+}
+\\\`\\\`\\\`
+
+\\\`schedule()\\\` is idempotent. If the schedule already exists with the same name and cron expression, it's a no-op. If the cron expression changed, it updates the existing schedule. This means it's safe to call on every server startup.
+
+### Cron expression reference
+
+\\\`\\\`\\\`
+┌───────── minute (0-59)
+│ ┌─────── hour (0-23)
+│ │ ┌───── day of month (1-31)
+│ │ │ ┌─── month (1-12)
+│ │ │ │ ┌─ day of week (0-7, 0 and 7 are Sunday)
+│ │ │ │ │
+* * * * *
+\\\`\\\`\\\`
+
+Common patterns:
+
+| Schedule | Cron | When it runs |
+|---|---|---|
+| Every hour | \\\`0 * * * *\\\` | :00 of every hour |
+| Every 15 minutes | \\\`*/15 * * * *\\\` | :00, :15, :30, :45 |
+| Daily at 3 AM | \\\`0 3 * * *\\\` | 3:00 AM |
+| Daily at midnight | \\\`0 0 * * *\\\` | 12:00 AM |
+| Weekdays at 9 AM | \\\`0 9 * * 1-5\\\` | Mon–Fri at 9:00 AM |
+| Weekly on Sunday | \\\`0 0 * * 0\\\` | Sunday at midnight |
+| First of every month | \\\`0 0 1 * *\\\` | 1st at midnight |
+
+### Timezone
+
+By default, cron expressions evaluate in UTC. To use a different timezone, pass the \\\`tz\\\` option:
+
+\\\`\\\`\\\`typescript
+await boss.schedule(DELETE_STALE_USERS, "0 3 * * *", null, {
+  tz: "America/New_York",
+});
+\\\`\\\`\\\`
+
+The third argument is \\\`data\\\` (pass \\\`null\\\` if you don't need static data attached to each scheduled job instance).
+
+---
+
+## Step 3: Make It Idempotent
+
+Scheduled jobs can run more than once for the same logical time window — retries, clock skew, a deploy that re-triggers the schedule, or a bug that runs the same handler twice. The handler must produce the same result regardless of how many times it runs.
+
+### The rule
+
+**If you ran the handler twice in a row, the second run should be a no-op (or at least not cause harm).**
+
+### Common idempotency patterns
+
+**Deletes are naturally idempotent.** Deleting the same record twice is safe — the first run removes it, the second run finds nothing to delete. This is one reason deletion-based cleanup is simpler than flag-based approaches:
+
+\\\`\\\`\\\`typescript
+// Deleting stale users is inherently idempotent — if the user was already
+// deleted by a previous run, the WHERE clause simply matches zero rows.
+const staleUsers = await getDb()
+  .select({ id: users.id })
+  .from(users)
+  .where(lt(users.lastLoginAt, cutoff));
+\\\`\\\`\\\`
+
+**Use \\\`ON CONFLICT DO NOTHING\\\` for inserts.** If the job creates records (e.g., generating monthly invoices), use upserts to avoid duplicates:
+
+\\\`\\\`\\\`typescript
+await getDb()
+  .insert(invoices)
+  .values({ userId: user.id, month: currentMonth, amount: 29.99 })
+  .onConflictDoNothing({ target: [invoices.userId, invoices.month] });
+\\\`\\\`\\\`
+
+**Use a job key for deduplication.** pg-boss can prevent duplicate scheduled instances using \\\`singletonKey\\\`:
+
+\\\`\\\`\\\`typescript
+await boss.schedule(MONTHLY_REPORT, "0 9 1 * *", null, {
+  singletonKey: \\\`monthly-report-\\\${new Date().toISOString().slice(0, 7)}\\\`,  // "monthly-report-2026-02"
+});
+\\\`\\\`\\\`
+
+If a job with that key already exists in the queue, pg-boss won't create another.
+
+**Log what was skipped.** So you can tell the difference between "ran but nothing to do" and "didn't run at all":
+
+\\\`\\\`\\\`typescript
+if (staleUsers.length === 0) {
+  getLogger().info({ jobId: job.id }, "No stale users to delete — skipping");
+  return;
+}
+\\\`\\\`\\\`
+
+---
+
+## Step 4: Passing Static Data to Scheduled Jobs
+
+If every scheduled run needs the same configuration, pass it as the third argument to \\\`schedule()\\\`:
+
+\\\`\\\`\\\`typescript
+await boss.schedule(
+  DELETE_STALE_USERS,
+  "0 3 * * *",
+  { daysThreshold: 90, dryRun: false },  // attached to every enqueued job
+);
+\\\`\\\`\\\`
+
+Then read it in the handler:
+
+\\\`\\\`\\\`typescript
+await boss.work(DELETE_STALE_USERS, async ([job]) => {
+  const { daysThreshold, dryRun } = job.data as { daysThreshold: number; dryRun: boolean };
+
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - daysThreshold);
+
+  // ... use dryRun to log instead of mutating
+});
+\\\`\\\`\\\`
+
+This is useful for:
+- Making thresholds configurable without code changes (update the schedule data)
+- Adding a \\\`dryRun\\\` flag during rollout
+- Passing env-specific configuration (different thresholds in staging vs production)
+
+---
+
+## Step 5: Monitoring That It Actually Ran
+
+A scheduled job that silently stops running is worse than a job that fails loudly. You need to know both that it ran and what it did.
+
+### Structured logging (minimum viable monitoring)
+
+Every scheduled handler should log at the start and end with enough context to answer "did it run?" and "what did it do?":
+
+\\\`\\\`\\\`typescript
+await boss.work(DELETE_STALE_USERS, async ([job]) => {
+  getLogger().info({ jobId: job.id, scheduledFor: job.data }, "Starting delete-stale-users");
+
+  // ... do the work ...
+
+  getLogger().info(
+    { jobId: job.id, deleted: staleUsers.length, durationMs: Date.now() - start },
+    "Finished delete-stale-users",
+  );
+});
+\\\`\\\`\\\`
+
+In production, pipe these logs to your aggregator (Datadog, Loki, CloudWatch) and set an alert for "no log line matching \\\`Finished delete-stale-users\\\` in 25 hours" — slightly more than the cron interval.
+
+### Query pg-boss tables directly
+
+pg-boss stores job history in Postgres. You can inspect it with Drizzle Studio (\\\`pnpm db:studio\\\`) or raw SQL:
+
+\\\`\\\`\\\`sql
+-- Did the job run recently?
+SELECT id, state, created_on, started_on, completed_on
+FROM pgboss.job
+WHERE name = 'delete-stale-users'
+ORDER BY created_on DESC
+LIMIT 5;
+
+-- What schedules are registered?
+SELECT * FROM pgboss.schedule;
+
+-- How many jobs by state?
+SELECT state, count(*)
+FROM pgboss.job
+WHERE name = 'delete-stale-users'
+GROUP BY state;
+\\\`\\\`\\\`
+
+Job states: \\\`created\\\` → \\\`active\\\` → \\\`completed\\\` (or \\\`failed\\\`, \\\`cancelled\\\`, \\\`expired\\\`).
+
+### Expose via a tRPC admin endpoint (optional)
+
+If you want to check job status from the admin panel without database access, you can add an endpoint. This requires a \\\`getBoss()\\\` export that returns the pg-boss instance.
+
+\\\`\\\`\\\`typescript
+// Add to your admin router
+import { getBoss } from "../jobs/index.js";
+
+jobStatus: adminProcedure
+  .input(z.object({ name: z.string() }))
+  .query(async ({ input }) => {
+    const boss = getBoss();
+    const size = await boss.getQueueSize(input.name);
+    const schedules = await boss.getSchedules();
+    const schedule = schedules.find((s) => s.name === input.name);
+
+    return {
+      queueSize: size,
+      cron: schedule?.cron ?? null,
+      tz: schedule?.options?.tz ?? "UTC",
+    };
+  }),
+\\\`\\\`\\\`
+
+To support this, add a \\\`getBoss()\\\` getter to your jobs index:
+
+\\\`\\\`\\\`typescript
+export function getBoss(): PgBoss {
+  if (!boss) throw new Error("pg-boss not initialized");
+  return boss;
+}
+\\\`\\\`\\\`
+
+---
+
+## Step 6: Cleanup Patterns
+
+Scheduled jobs often accumulate data — completed job records in pg-boss tables, stale application data, or temporary artifacts. Plan for cleanup from the start.
+
+### pg-boss auto-cleanup
+
+pg-boss automatically deletes completed/failed jobs after a retention period. The default is 30 days. You can configure it per-queue:
+
+\\\`\\\`\\\`typescript
+await boss.createQueue(DELETE_STALE_USERS, {
+  retentionDays: 7,  // keep job history for 7 days
+});
+\\\`\\\`\\\`
+
+Or per-schedule:
+
+\\\`\\\`\\\`typescript
+await boss.schedule(DELETE_STALE_USERS, "0 3 * * *", null, {
+  retentionDays: 7,
+});
+\\\`\\\`\\\`
+
+### Application-level cleanup jobs
+
+If your scheduled job creates temporary data, add a companion cleanup job. For example, if you had a \\\`reports\\\` table and generated daily reports that are only needed for 30 days:
+
+\\\`\\\`\\\`typescript
+// Create a cleanup handler for old reports
+import { getDb } from "../../db/index.js";
+import { getLogger } from "../../lib/logger.js";
+
+export const CLEANUP_OLD_REPORTS = "cleanup-old-reports";
+
+export async function registerCleanupOldReportsHandler(boss: PgBoss): Promise<void> {
+  await boss.work(CLEANUP_OLD_REPORTS, async ([job]) => {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - 30);
+
+    const result = await getDb()
+      .delete(reports)
+      .where(lt(reports.createdAt, cutoff));
+
+    getLogger().info({ jobId: job.id, deleted: result.rowCount }, "Cleaned up old reports");
+  });
+}
+\\\`\\\`\\\`
+
+\\\`\\\`\\\`typescript
+// In initJobs() — schedule the cleanup
+await boss.schedule(CLEANUP_OLD_REPORTS, "0 4 * * *");  // 4 AM, after the report job
+\\\`\\\`\\\`
+
+### Pattern: pair a generator with its cleaner
+
+| Generator | Cleaner | Schedule |
+|---|---|---|
+| \\\`generate-daily-report\\\` (3 AM) | \\\`cleanup-old-reports\\\` (4 AM) | Keep 30 days |
+| \\\`sync-external-data\\\` (every hour) | \\\`cleanup-stale-sync-cache\\\` (daily) | Keep 7 days |
+| \\\`send-digest-email\\\` (weekly) | N/A — no artifacts to clean | N/A |
+
+Run the cleaner after the generator to avoid a window where both are fighting over the same data.
+
+---
+
+## Step 7: Retries and Dead Letters
+
+Scheduled jobs should be resilient to transient failures (database timeouts, external API blips). Configure retries on the queue or the schedule.
+
+### On the queue (applies to all jobs in that queue)
+
+\\\`\\\`\\\`typescript
+await boss.createQueue(DELETE_STALE_USERS, {
+  retryLimit: 3,
+  retryDelay: 60,       // 60 seconds between retries
+  retryBackoff: true,   // exponential backoff: 60s, 120s, 240s
+  deadLetter: "failed-jobs",  // after all retries exhausted, move here
+});
+\\\`\\\`\\\`
+
+### On the schedule (applies to each enqueued instance)
+
+\\\`\\\`\\\`typescript
+await boss.schedule(DELETE_STALE_USERS, "0 3 * * *", null, {
+  retryLimit: 3,
+  retryDelay: 60,
+  retryBackoff: true,
+});
+\\\`\\\`\\\`
+
+### Dead letter queue
+
+A dead letter queue catches jobs that failed all retries. Register a handler that logs or alerts:
+
+\\\`\\\`\\\`typescript
+// Create a dead letter handler
+export async function registerDeadLetterHandler(boss: PgBoss): Promise<void> {
+  await boss.createQueue("failed-jobs");
+
+  await boss.work("failed-jobs", async ([job]) => {
+    getLogger().error(
+      { originalJob: job.data, jobId: job.id },
+      "Job exhausted all retries and moved to dead letter queue",
+    );
+    // Optionally: send an alert, post to Slack, increment a metric
+  });
+}
+\\\`\\\`\\\`
+
+---
+
+## Step 8: Removing a Schedule
+
+When you no longer need a scheduled job, call \\\`unschedule()\\\` during initialization:
+
+\\\`\\\`\\\`typescript
+// In initJobs()
+await boss.unschedule("old-job-name");
+\\\`\\\`\\\`
+
+Or remove it from the \\\`pgboss.schedule\\\` table directly:
+
+\\\`\\\`\\\`sql
+DELETE FROM pgboss.schedule WHERE name = 'old-job-name';
+\\\`\\\`\\\`
+
+Don't just remove the \\\`schedule()\\\` call from code — the existing schedule persists in Postgres. You must explicitly unschedule it or it will keep enqueuing jobs (which will fail if the handler is gone).
+
+---
+
+## Step 9: Write Tests
+
+### Test the handler logic directly
+
+Don't test the pg-boss scheduling machinery — test your handler's business logic.
+
+\\\`\\\`\\\`typescript
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+vi.mock("../../db/index.js", () => ({ getDb: vi.fn() }));
+
+import type PgBoss from "pg-boss";
+
+const mockDb = {
+  select: vi.fn().mockReturnThis(),
+  from: vi.fn().mockReturnThis(),
+  where: vi.fn().mockResolvedValue([
+    { id: "user-1", email: "stale@test.com" },
+  ]),
+  delete: vi.fn().mockReturnThis(),
+};
+
+// Replace the getDb import with our mock
+vi.doMock("../../db/index.js", () => ({ getDb: () => mockDb }));
+
+import { registerDeleteStaleUsersHandler } from "./deleteStaleUsers.js";
+
+describe("deleteStaleUsers", () => {
+  it("registers the handler", async () => {
+    const mockBoss = { work: vi.fn() } as unknown as PgBoss;
+    await registerDeleteStaleUsersHandler(mockBoss);
+    expect(mockBoss.work).toHaveBeenCalledWith("delete-stale-users", expect.any(Function));
+  });
+
+  it("deletes stale users", async () => {
+    const mockBoss = { work: vi.fn() } as unknown as PgBoss;
+    await registerDeleteStaleUsersHandler(mockBoss);
+
+    // Extract the handler that was registered
+    const handler = (mockBoss.work as any).mock.calls[0][1] as Function;
+    await handler([{ id: "job-1", data: {} }]);
+
+    expect(mockDb.delete).toHaveBeenCalled();
+  });
+
+  it("skips when no stale users found", async () => {
+    mockDb.where.mockResolvedValueOnce([]);  // no results
+
+    const mockBoss = { work: vi.fn() } as unknown as PgBoss;
+    await registerDeleteStaleUsersHandler(mockBoss);
+
+    const handler = (mockBoss.work as any).mock.calls[0][1] as Function;
+    await handler([{ id: "job-1", data: {} }]);
+
+    expect(mockDb.delete).not.toHaveBeenCalled();
+  });
+});
+\\\`\\\`\\\`
+
+### Test that schedules are registered at startup
+
+\\\`\\\`\\\`typescript
+import { describe, it, expect, vi } from "vitest";
+
+vi.mock("pg-boss", () => {
+  return {
+    default: vi.fn().mockImplementation(() => ({
+      start: vi.fn(),
+      on: vi.fn(),
+      work: vi.fn(),
+      schedule: vi.fn(),
+    })),
+  };
+});
+
+vi.mock("./handlers/example.js", () => ({
+  registerExampleHandler: vi.fn(),
+}));
+vi.mock("./handlers/deleteStaleUsers.js", () => ({
+  DELETE_STALE_USERS: "delete-stale-users",
+  registerDeleteStaleUsersHandler: vi.fn(),
+}));
+
+import { initJobs } from "./index.js";
+import PgBoss from "pg-boss";
+
+it("registers scheduled jobs on startup", async () => {
+  await initJobs("postgresql://mock");
+
+  const bossInstance = (PgBoss as unknown as vi.Mock).mock.results[0].value;
+  expect(bossInstance.schedule).toHaveBeenCalledWith(
+    "delete-stale-users",
+    "0 3 * * *",
+  );
+});
+\\\`\\\`\\\`
+
+---
+
+## Checklist
+
+**Handler**
+- [ ] Handler file in the jobs handlers directory with exported job name constant
+- [ ] Handler imports \\\`getDb\\\` directly (not from tRPC context)
+- [ ] Handler is idempotent — safe to run twice for the same time window
+- [ ] Handler logs at start and finish with \\\`jobId\\\`, result counts, and duration
+- [ ] Handler registered in \\\`initJobs()\\\`
+
+**Schedule**
+- [ ] \\\`boss.schedule()\\\` called in \\\`initJobs()\\\` with the correct cron expression
+- [ ] Timezone set via \\\`tz\\\` option if the schedule should follow local time, not UTC
+- [ ] Old/removed schedules cleaned up with \\\`boss.unschedule()\\\`
+
+**Resilience**
+- [ ] Retries configured (3 retries with backoff is a good default)
+- [ ] Dead letter queue set up if failures need human attention
+- [ ] Cleanup job exists for any temporary data the scheduled job creates
+
+**Monitoring**
+- [ ] Structured log lines at start and finish of every run
+- [ ] Alert or check for "job hasn't run in > expected interval" (log aggregator or admin endpoint)
+
+**Tests**
+- [ ] Handler business logic tested by extracting and calling the registered function
+- [ ] Schedule registration verified in \\\`initJobs\\\` test
+- [ ] Idempotency tested — handler called twice produces correct results
+
+---
+
+## Common Scheduled Job Patterns
+
+| Job | Schedule | Key concerns |
+|---|---|---|
+| **Delete stale accounts** | Daily | Idempotent (deletes are safe to repeat), log count |
+| **Send digest emails** | Daily/weekly | Use external service adapter, offload to background job handler |
+| **Sync external data** | Hourly | Idempotent (upsert), handle API rate limits, partial failure |
+| **Generate reports** | Daily/monthly | Pair with a cleanup job, store results with a date key |
+| **Expire temporary tokens** | Hourly | \\\`DELETE WHERE expires_at < NOW()\\\`, log count |
+| **Refresh materialized views** | Every 15 min | Postgres \\\`REFRESH MATERIALIZED VIEW CONCURRENTLY\\\` |
+| **Health check external APIs** | Every 5 min | Log status, alert on consecutive failures |`,
+  },
+  {
+    name: 'Background Jobs',
+    description:
+      'pg-boss provides a persistent job queue backed by Postgres. Covers job handlers, enqueuing, retries, concurrency, and scheduling.',
+    content: `# Background Jobs
+
+pg-boss provides a persistent job queue backed by the existing Postgres database. No Redis or additional infrastructure. Jobs survive server restarts and support scheduling, retries, and concurrency.
+
+## How It's Wired
+
+\\\`\\\`\\\`typescript
+// jobs/index.ts
+import PgBoss from "pg-boss";
+
+let boss: PgBoss | null = null;
+
+export async function initJobs(connectionString: string): Promise<void> {
+  boss = new PgBoss(connectionString);
+  boss.on("error", (error) => getLogger().error({ err: error }, "pg-boss error"));
+  await boss.start();
+  await boss.createQueue(EXAMPLE_JOB);  // pg-boss v10: required before work()/send()
+  await registerExampleHandler(boss);
+}
+
+export async function enqueueJob<T extends object>(name: string, data: T): Promise<string | null> {
+  if (!boss) throw new Error("pg-boss not initialized");
+  return boss.send(name, data);
+}
+\\\`\\\`\\\`
+
+Lifecycle is managed in the main entry file:
+
+\\\`\\\`\\\`typescript
+async function start() {
+  await initJobs(connectionString);  // starts pg-boss, registers handlers
+  server.listen(env.PORT, () => { ... });
+}
+
+async function shutdown() {
+  await closeJobs();  // graceful stop
+}
+\\\`\\\`\\\`
+
+## Example Job (Already Implemented)
+
+\\\`\\\`\\\`typescript
+// jobs/handlers/example.ts
+export const EXAMPLE_JOB = "example-job";
+
+export async function registerExampleHandler(boss: PgBoss): Promise<void> {
+  await boss.work(EXAMPLE_JOB, async ([job]) => {
+    getLogger().info({ jobId: job.id, data: job.data }, "Processing example job");
+  });
+}
+\\\`\\\`\\\`
+
+Triggered via tRPC:
+
+\\\`\\\`\\\`typescript
+// routers/jobs.ts
+enqueue: protectedProcedure
+  .input(z.object({ message: z.string().optional() }))
+  .mutation(async ({ input }) => {
+    const jobId = await enqueueJob(EXAMPLE_JOB, {
+      message: input.message ?? "hello from trpc",
+      enqueuedAt: Date.now(),
+    });
+    return { jobId };
+  }),
+\\\`\\\`\\\`
+
+## How to Implement a New Job
+
+### 1. Create the handler
+
+\\\`\\\`\\\`typescript
+// jobs/handlers/sendEmail.ts
+import type PgBoss from "pg-boss";
+import { getLogger } from "../../lib/logger.js";
+
+export const SEND_EMAIL_JOB = "send-email";
+
+type SendEmailPayload = {
+  to: string;
+  subject: string;
+  body: string;
+};
+
+export async function registerSendEmailHandler(boss: PgBoss): Promise<void> {
+  await boss.work(SEND_EMAIL_JOB, async ([job]) => {
+    const { to, subject, body } = job.data as SendEmailPayload;
+    getLogger().info({ jobId: job.id, to, subject }, "Sending email");
+
+    // your email sending logic here
+    // await sendgrid.send({ to, subject, html: body });
+
+    getLogger().info({ jobId: job.id }, "Email sent");
+  });
+}
+\\\`\\\`\\\`
+
+### 2. Register it
+
+\\\`\\\`\\\`typescript
+// jobs/index.ts
+import { registerSendEmailHandler } from "./handlers/sendEmail.js";
+
+export async function initJobs(connectionString: string): Promise<void> {
+  // ...existing setup...
+  await boss.createQueue(SEND_EMAIL_JOB);  // pg-boss v10: required before work()/send()
+  await registerExampleHandler(boss);
+  await registerSendEmailHandler(boss);  // add here
+}
+\\\`\\\`\\\`
+
+### 3. Enqueue from anywhere
+
+\\\`\\\`\\\`typescript
+import { enqueueJob } from "../jobs/index.js";
+import { SEND_EMAIL_JOB } from "../jobs/handlers/sendEmail.js";
+
+await enqueueJob(SEND_EMAIL_JOB, {
+  to: "user@example.com",
+  subject: "Welcome!",
+  body: "<h1>Hello</h1>",
+});
+\\\`\\\`\\\`
+
+### 4. (Optional) Expose via tRPC
+
+\\\`\\\`\\\`typescript
+// routers/email.ts
+sendWelcome: protectedProcedure
+  .input(z.object({ userId: z.string().uuid() }))
+  .mutation(async ({ ctx, input }) => {
+    const [user] = await ctx.db.select().from(users).where(eq(users.id, input.userId));
+    const jobId = await enqueueJob(SEND_EMAIL_JOB, {
+      to: user.email,
+      subject: "Welcome!",
+      body: \\\`<h1>Hello \\\${user.name}</h1>\\\`,
+    });
+    return { jobId };
+  }),
+\\\`\\\`\\\`
+
+## Advanced pg-boss Features
+
+### Scheduled/delayed jobs
+
+\\\`\\\`\\\`typescript
+await boss.send(SEND_EMAIL_JOB, data, {
+  startAfter: 30,  // delay 30 seconds
+});
+
+// Or with a cron schedule
+await boss.schedule(SEND_EMAIL_JOB, "0 9 * * *", data);  // daily at 9am
+\\\`\\\`\\\`
+
+### Retries
+
+\\\`\\\`\\\`typescript
+await boss.send(SEND_EMAIL_JOB, data, {
+  retryLimit: 3,
+  retryDelay: 60,  // 60 seconds between retries
+});
+\\\`\\\`\\\`
+
+### Concurrency
+
+\\\`\\\`\\\`typescript
+await boss.work(SEND_EMAIL_JOB, { batchSize: 5 }, async (jobs) => {
+  // processes up to 5 jobs at a time
+  for (const job of jobs) { /* ... */ }
+});
+\\\`\\\`\\\`
+
+## How to Test
+
+Mock \\\`enqueueJob\\\` in router tests:
+
+\\\`\\\`\\\`typescript
+vi.mock("../jobs/index.js", () => ({
+  enqueueJob: vi.fn().mockResolvedValue("job-123"),
+}));
+
+import { enqueueJob } from "../jobs/index.js";
+
+it("enqueues a job", async () => {
+  const caller = appRouter.createCaller({ user: { sub: "u1" }, db: mockDb, pubsub: mockPubsub });
+  const result = await caller.jobs.enqueue({ message: "test" });
+
+  expect(result.jobId).toBe("job-123");
+  expect(enqueueJob).toHaveBeenCalledWith("example-job", expect.objectContaining({ message: "test" }));
+});
+\\\`\\\`\\\`
+
+For handler tests, call the handler function directly:
+
+\\\`\\\`\\\`typescript
+import type PgBoss from "pg-boss";
+
+it("processes the job", async () => {
+  const mockBoss = { work: vi.fn() } as unknown as PgBoss;
+  await registerSendEmailHandler(mockBoss);
+
+  // Get the handler that was registered
+  const handler = mockBoss.work.mock.calls[0][1] as Function;
+  await handler([{ id: "job-1", data: { to: "a@b.com", subject: "Hi", body: "Hello" } }]);
+
+  // Assert on side effects (email sent, logger called, etc.)
+});
+\\\`\\\`\\\`
+
+## How to Debug
+
+- **Jobs not running?** Check that \\\`initJobs()\\\` completed successfully at startup (look for "pg-boss started" in logs). If it fails, pg-boss can't create its schema tables — check your DATABASE_URL.
+- **Job stuck in "active"?** If the server crashes mid-job, pg-boss marks it as expired after a timeout (default 15 min). Check with: \\\`SELECT * FROM pgboss.job WHERE name = 'your-job' AND state = 'active'\\\`.
+- **Job failed silently?** pg-boss catches handler errors and moves the job to "failed" state. Check: \\\`SELECT * FROM pgboss.job WHERE name = 'your-job' AND state = 'failed'\\\`.
+- **pg-boss tables not created?** pg-boss auto-creates its \\\`pgboss\\\` schema on first \\\`boss.start()\\\`. If your DB user lacks CREATE SCHEMA permissions, it will fail.
+- **Want to inspect the queue?** Use Drizzle Studio (\\\`pnpm db:studio\\\`) and look at the \\\`pgboss.job\\\` table, or query directly: \\\`SELECT state, count(*) FROM pgboss.job GROUP BY state\\\`.`,
+  },
+  {
+    name: 'Real-Time Sync',
+    description:
+      'When one client writes data, all connected clients see the update instantly. Uses Postgres LISTEN/NOTIFY piped through tRPC WebSocket subscriptions.',
+    content: `# Real-Time Sync
+
+When one client writes data, all connected clients see the update instantly. This uses Postgres LISTEN/NOTIFY piped through tRPC WebSocket subscriptions — no polling, no Redis, no extra infrastructure.
+
+## How It Works
+
+\\\`\\\`\\\`
+Client A mutation
+  → API writes to DB
+  → API publishes SyncEvent via Postgres NOTIFY
+  → PgPubSub dispatches to all subscribers
+  → tRPC subscription yields event to all connected WebSocket clients
+  → Client B's hook receives event, updates React Query cache
+\\\`\\\`\\\`
+
+Key files:
+- PgPubSub class wrapping Postgres LISTEN/NOTIFY
+- Async generator bridging PubSub into tRPC subscriptions
+- SyncEvent and SyncAction types in the shared schemas package
+- Client-side hooks for cache updates on sync events
+
+## Example: The User Sync (Already Implemented)
+
+### API side
+
+\\\`\\\`\\\`typescript
+// In the user router
+
+// Subscription — listens for sync events
+onSync: publicProcedure.subscription(async function* ({ ctx, signal }) {
+  for await (const event of iterateEvents<SyncEvent<User>>(
+    ctx.pubsub,
+    syncChannel("user"),  // → "sync:user"
+    signal!,
+  )) {
+    yield tracked(String(++eventId), event);
+  }
+}),
+
+// Mutations — each publishes a sync event after writing
+
+create: protectedProcedure
+  .input(CreateUserSchema)
+  .mutation(async ({ ctx, input }) => {
+    const [user] = await ctx.db.insert(users).values({ ...input, role: "user" }).returning();
+
+    await ctx.pubsub.publish(syncChannel("user"), {
+      action: "created",
+      data: user,
+      timestamp: Date.now(),
+    } satisfies SyncEvent<typeof user>);
+
+    return user;
+  }),
+
+touch: protectedProcedure
+  .input(CreateUserSchema.pick({ email: true }))
+  .mutation(async ({ ctx, input }) => {
+    const [user] = await ctx.db
+      .update(users)
+      .set({ lastLoginAt: new Date() })
+      .where(eq(users.email, input.email))
+      .returning();
+    if (user) {
+      await ctx.pubsub.publish(syncChannel("user"), {
+        action: "updated",
+        data: user,
+        timestamp: Date.now(),
+      } satisfies SyncEvent<typeof user>);
+    }
+    return user ?? null;
+  }),
+
+delete: protectedProcedure
+  .input(CreateUserSchema.pick({ email: true }))
+  .mutation(async ({ ctx, input }) => {
+    const [deleted] = await ctx.db
+      .delete(users)
+      .where(eq(users.email, input.email))
+      .returning();
+    if (!deleted) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "User not found" });
+    }
+    await ctx.pubsub.publish(syncChannel("user"), {
+      action: "deleted",
+      data: deleted,
+      timestamp: Date.now(),
+    } satisfies SyncEvent<typeof deleted>);
+    return { success: true };
+  }),
+\\\`\\\`\\\`
+
+### Client side
+
+\\\`\\\`\\\`typescript
+// In the useUsers hook
+import { useSyncSubscription } from "@myapp/hooks";
+
+useSyncSubscription<SerializedUser>(trpc.user.onSync, {
+  onCreated: (data) =>
+    utils.user.list.setData(undefined, (old) =>
+      old ? [...old, data] : [data]
+    ),
+  onUpdated: (data) =>
+    utils.user.list.setData(undefined, (old) =>
+      old ? old.map((u) => (u.id === data.id ? data : u)) : old
+    ),
+  onDeleted: () => {
+    utils.user.list.invalidate();
+  },
+});
+\\\`\\\`\\\`
+
+### Date Serialization
+
+When data travels over the wire as JSON, \\\`Date\\\` objects are automatically serialized to ISO 8601 strings. The server-side Zod schema defines fields like \\\`createdAt\\\` as \\\`z.date()\\\`, but by the time data reaches the client via tRPC (either through queries or sync events), these become strings.
+
+Client hook type definitions reflect this: \\\`SerializedUser\\\` declares \\\`createdAt: string\\\` and \\\`lastLoginAt: string | null\\\`. This is why the client type is defined manually rather than inferred from the Zod schema -- the wire format differs from the server type. No custom transformer is needed; tRPC handles the JSON serialization transparently.
+
+## How to Implement for a New Entity
+
+### 1. Add the subscription to your router
+
+After creating your entity schemas, the router would look like:
+
+\\\`\\\`\\\`typescript
+// Create a new entity router
+import { tracked } from "@trpc/server";
+import { syncChannel, type SyncEvent, type Post } from "@myapp/shared";
+import { iterateEvents } from "../lib/iterateEvents.js";
+
+let eventId = 0;
+
+export const postRouter = router({
+  onSync: publicProcedure.subscription(async function* ({ ctx, signal }) {
+    for await (const event of iterateEvents<SyncEvent<Post>>(
+      ctx.pubsub,
+      syncChannel("post"),
+      signal!,
+    )) {
+      yield tracked(String(++eventId), event);
+    }
+  }),
+
+  create: protectedProcedure
+    .input(CreatePostSchema)
+    .mutation(async ({ ctx, input }) => {
+      const [post] = await ctx.db.insert(posts).values(input).returning();
+      await ctx.pubsub.publish(syncChannel("post"), {
+        action: "created",
+        data: post,
+        timestamp: Date.now(),
+      } satisfies SyncEvent<typeof post>);
+      return post;
+    }),
+});
+\\\`\\\`\\\`
+
+### 2. Subscribe in your client hook
+
+\\\`\\\`\\\`typescript
+// Create a new entity hook
+export function usePosts() {
+  const utils = trpc.useUtils();
+  const listQuery = trpc.post.list.useQuery();
+
+  trpc.post.onSync.useSubscription(undefined, {
+    onData(event) {
+      const { action, data } = event.data as unknown as SyncEvent<SerializedPost>;
+      switch (action) {
+        case "created":
+          utils.post.list.setData(undefined, (old) => old ? [...old, data] : [data]);
+          break;
+        case "deleted":
+          utils.post.list.invalidate();
+          break;
+      }
+    },
+  });
+
+  return { posts: listQuery.data ?? [], isLoading: listQuery.isLoading };
+}
+\\\`\\\`\\\`
+
+### Alternative: Use the generic \\\`useSyncSubscription\\\` hook
+
+\\\`useSyncSubscription\\\` is already generic -- it accepts any tRPC subscription procedure as its first argument:
+
+\\\`\\\`\\\`typescript
+// Signature from the sync subscription utility
+function useSyncSubscription<T>(
+  subscription: SyncSubscriptionHook,
+  updaters: CacheUpdater<T>,
+): void
+\\\`\\\`\\\`
+
+For a new entity, pass the corresponding subscription procedure:
+
+\\\`\\\`\\\`typescript
+import { useSyncSubscription } from "@myapp/hooks";
+
+useSyncSubscription<Post>(trpc.post.onSync, {
+  onCreated: (post) => utils.post.list.setData(undefined, (old) => [...(old ?? []), post]),
+  onUpdated: (post) => utils.post.list.setData(undefined, (old) =>
+    old ? old.map((p) => (p.id === post.id ? post : p)) : old
+  ),
+  onDeleted: () => utils.post.list.invalidate(),
+});
+\\\`\\\`\\\`
+
+## How to Test
+
+Sync events are just pubsub publishes. Test that mutations call \\\`ctx.pubsub.publish\\\`:
+
+\\\`\\\`\\\`typescript
+it("create publishes sync event", async () => {
+  const mockPubsub = { publish: vi.fn().mockResolvedValue(undefined) };
+  const caller = appRouter.createCaller({
+    user: { sub: "u1", email: "test@test.com" },
+    db: mockDb as any,
+    pubsub: mockPubsub as any,
+  });
+
+  await caller.post.create({ title: "Hello", body: "World" });
+
+  expect(mockPubsub.publish).toHaveBeenCalledWith(
+    "sync:post",
+    expect.objectContaining({ action: "created" }),
+  );
+});
+\\\`\\\`\\\`
+
+## How to Debug
+
+- **Events not arriving?** Check the WebSocket connection in browser DevTools (Network → WS tab). You should see the tRPC subscription frame. If the connection drops, check CORS and that the WS URL resolves correctly.
+- **Stale cache after sync?** Make sure your \\\`setData\\\` callback returns a new array, not a mutation of the old one. React Query uses reference equality.
+- **Events from other server instances?** PgPubSub uses Postgres NOTIFY, which broadcasts across all connections to the same database. Multi-instance works out of the box.
+- **Subscription never yields?** Check that your mutation actually calls \\\`ctx.pubsub.publish()\\\` and that the channel names match (\\\`syncChannel("entity")\\\` on both sides).`,
+  },
+  {
+    name: 'Notifications',
+    description:
+      'Push notifications (mobile), in-app toasts (web + mobile), and a paginated notification history view. One function call persists to DB, publishes a real-time sync event, and fires mobile push.',
+    content: `# Notifications
+
+Push notifications (mobile), in-app toasts (web + mobile), and a paginated notification history view. One function call persists to DB, publishes a real-time sync event, and fires mobile push — no separate steps.
+
+## How It's Wired
+
+\\\`\\\`\\\`
+sendNotification(db, pubsub, target, payload)
+  → inserts into \\\`notifications\\\` table
+  → publishes SyncEvent on "notification" channel (Postgres LISTEN/NOTIFY)
+  → looks up push tokens for eligible users (opt-out check)
+  → calls push adapter (Expo in prod, console in dev)
+\\\`\\\`\\\`
+
+The notification service takes \\\`db\\\` and \\\`pubsub\\\` as explicit parameters (dependency injection). It can be called from tRPC procedures, pg-boss job handlers, or any server-side code that has access to a database connection and pubsub instance.
+
+## Data Model
+
+### \\\`notifications\\\` table
+
+| Column | Type | Notes |
+|--------|------|-------|
+| \\\`id\\\` | uuid | PK, auto-generated |
+| \\\`userId\\\` | uuid | FK → users.id, cascade delete |
+| \\\`title\\\` | varchar(255) | Required |
+| \\\`body\\\` | varchar(2000) | Required |
+| \\\`actionUrl\\\` | varchar(500) | Nullable — navigates on click |
+| \\\`read\\\` | boolean | Default false |
+| \\\`createdAt\\\` | timestamptz | Default now |
+
+### \\\`push_tokens\\\` table
+
+| Column | Type | Notes |
+|--------|------|-------|
+| \\\`id\\\` | uuid | PK, auto-generated |
+| \\\`userId\\\` | uuid | FK → users.id, cascade delete |
+| \\\`token\\\` | varchar(255) | Unique — Expo push token |
+| \\\`createdAt\\\` | timestamptz | Default now |
+
+### \\\`users\\\` table addition
+
+| Column | Type | Notes |
+|--------|------|-------|
+| \\\`pushOptOut\\\` | boolean | Default false — suppresses push only, toasts still appear |
+
+Schema definition in the database schema file.
+
+## Zod Schemas
+
+All schemas live in the shared schemas package and are re-exported from the schemas index.
+
+\\\`\\\`\\\`typescript
+import {
+  CreateNotificationSchema,  // { title, body, actionUrl? }
+  NotificationSchema,        // full notification with id, userId, read, createdAt
+  PushTokenSchema,           // { id, userId, token, createdAt }
+  RegisterPushTokenSchema,   // { token }
+  NotificationListInputSchema, // { cursor?, limit }
+  UpdatePushOptOutSchema,    // { optOut }
+  type Notification,
+  type CreateNotification,
+  type PushToken,
+  type RegisterPushToken,
+  type NotificationListInput,
+  type UpdatePushOptOut,
+} from "@myapp/shared";
+\\\`\\\`\\\`
+
+## Sending Notifications
+
+### From a tRPC procedure or job handler
+
+\\\`\\\`\\\`typescript
+import { sendNotification } from "../../services/notifications/index.js";
+
+// Single user
+const result = await sendNotification(db, pubsub, { userId: "user-uuid" }, {
+  title: "New comment",
+  body: "Someone commented on your post",
+  actionUrl: "/posts/123",
+});
+
+// Multiple users
+const result = await sendNotification(db, pubsub, { userIds: ["id-1", "id-2"] }, {
+  title: "Update available",
+  body: "Version 2.0 is out",
+});
+\\\`\\\`\\\`
+
+### Broadcast to all users
+
+\\\`\\\`\\\`typescript
+import { broadcastNotification } from "../../services/notifications/index.js";
+
+const result = await broadcastNotification(db, pubsub, {
+  title: "System maintenance",
+  body: "Scheduled downtime tonight at 11pm",
+});
+\\\`\\\`\\\`
+
+### Return value
+
+Both functions return:
+
+\\\`\\\`\\\`typescript
+{
+  notificationIds: string[];
+  pushResults: { sent: number; skipped: number; failed: number };
+}
+\\\`\\\`\\\`
+
+- \\\`sent\\\` — push notifications delivered
+- \\\`skipped\\\` — users who opted out of push
+- \\\`failed\\\` — push delivery failures (stale tokens auto-cleaned)
+
+### From a pg-boss job
+
+The welcome notification job shows the pattern for calling \\\`sendNotification\\\` from a background job:
+
+\\\`\\\`\\\`typescript
+import { sendNotification } from "../../services/notifications/index.js";
+import { getDb, getConnectionString } from "../../db/index.js";
+import { PgPubSub } from "../../pubsub.js";
+
+// Inside a job handler:
+const db = getDb();
+const pubsub = new PgPubSub(getConnectionString());
+
+try {
+  await sendNotification(db, pubsub, { userId }, {
+    title: "Thanks for registering!",
+    body: "Welcome! Explore the app to get started.",
+  });
+} finally {
+  await pubsub.close();  // always close the pubsub instance you created
+}
+\\\`\\\`\\\`
+
+Job handlers create their own \\\`PgPubSub\\\` instance because they run outside the HTTP request lifecycle. Always close it in a \\\`finally\\\` block.
+
+## tRPC Router
+
+The notification router — all endpoints require authentication (\\\`protectedProcedure\\\`).
+
+| Procedure | Type | Input | Description |
+|-----------|------|-------|-------------|
+| \\\`list\\\` | query | \\\`{ cursor?, limit }\\\` | Paginated list, newest first |
+| \\\`unreadCount\\\` | query | — | Count of unread notifications |
+| \\\`markRead\\\` | mutation | \\\`{ id }\\\` | Mark one notification as read (ownership checked) |
+| \\\`markUnread\\\` | mutation | \\\`{ id }\\\` | Mark one notification as unread (ownership checked) |
+| \\\`markAllRead\\\` | mutation | — | Mark all unread notifications as read |
+| \\\`onSync\\\` | subscription | — | Real-time sync events for the notification channel |
+| \\\`registerPushToken\\\` | mutation | \\\`{ token }\\\` | Upsert an Expo push token for the current user |
+| \\\`updatePushOptOut\\\` | mutation | \\\`{ optOut }\\\` | Toggle push notification opt-out |
+
+All queries and mutations scope to the authenticated user. \\\`markRead\\\`/\\\`markUnread\\\` verify notification ownership before updating.
+
+## Push Adapter
+
+The push system uses the adapter pattern (see the Adding an External Service spec).
+
+\\\`\\\`\\\`
+packages/api/src/services/push/
+  types.ts      ← PushAdapter type, SendPushParams, SendPushResult
+  console.ts    ← Dev adapter (logs to Pino, returns success)
+  expo.ts       ← Expo Push API adapter (batches in chunks of 100)
+  index.ts      ← Factory: getPushAdapter(), setPushAdapter(), resetPushAdapter()
+\\\`\\\`\\\`
+
+### Adapter selection
+
+- No \\\`PUSH_PROVIDER\\\` env var → console adapter (dev mode, no real pushes)
+- \\\`PUSH_PROVIDER=expo\\\` → Expo adapter (requires \\\`EXPO_ACCESS_TOKEN\\\`)
+
+### Stale token cleanup
+
+When the Expo API returns \\\`DeviceNotRegistered\\\`, the notification service automatically deletes the stale push token from the \\\`push_tokens\\\` table. No manual cleanup needed.
+
+## Client Hooks
+
+Both hooks live in the hooks package and are re-exported from the hooks index.
+
+### \\\`useNotifications()\\\`
+
+\\\`\\\`\\\`typescript
+import { useNotifications } from "@myapp/hooks";
+
+const {
+  notifications,   // Notification[] — current page
+  isLoading,       // boolean
+  error,           // string | null
+  hasNextPage,     // boolean
+  fetchNextPage,   // () => void
+  unreadCount,     // number
+  markRead,        // (input: { id: string }) => Promise
+  markUnread,      // (input: { id: string }) => Promise
+  markAllRead,     // () => Promise
+} = useNotifications();
+\\\`\\\`\\\`
+
+Automatically syncs in real-time via \\\`useSyncSubscription\\\` — new notifications appear instantly, read/unread state updates propagate across tabs.
+
+### \\\`useNotificationToast(onNotification)\\\`
+
+\\\`\\\`\\\`typescript
+import { useNotificationToast } from "@myapp/hooks";
+
+useNotificationToast((notification) => {
+  // notification: { id, title, body, actionUrl }
+  // Show a toast, Alert, or whatever your platform supports
+});
+\\\`\\\`\\\`
+
+Framework-agnostic — the callback receives the notification data and you decide how to display it. Fires only for \\\`created\\\` sync events (new notifications).
+
+## UI Components
+
+### Web
+
+- **NotificationToast** — Fixed-position toast stack in top-right. Auto-dismisses after 5 seconds. Click navigates to \\\`actionUrl\\\`. Rendered in the app layout so it's always active.
+- **NotificationList** — Paginated notification list with mark read/unread, mark all read, relative timestamps. Used in the Profile page.
+- **Unread badge** — Navbar shows unread count badge when > 0.
+
+### Mobile
+
+- **Notifications tab** — FlatList with infinite scroll, long-press to toggle read/unread, tap to navigate to \\\`actionUrl\\\`, mark all as read button.
+- **Push token registration** — Registers Expo push token on app launch via \\\`registerPushToken\\\` mutation. Uses a ref guard to prevent duplicate registrations.
+- **Push opt-out toggle** — Switch component calling \\\`updatePushOptOut\\\` mutation.
+- **Toast on foreground** — Mobile shows an Alert when a notification arrives while the app is in the foreground.
+
+## Welcome Notification (Example)
+
+A built-in example that exercises the full pipeline end-to-end. When a user registers, a pg-boss job fires and sends:
+
+> **Thanks for registering!**
+> Welcome! Explore the app to get started.
+
+Implementation:
+- Job handler for sending the welcome notification
+- Job registration: queue created and handler registered at startup in the jobs index
+- Trigger: user \\\`create\\\` mutation enqueues the job with \\\`{ userId }\\\` after inserting the user
+
+## How to Add a New Notification Type
+
+### 1. Send from server-side code
+
+\\\`\\\`\\\`typescript
+import { sendNotification } from "../services/notifications/index.js";
+
+// In a tRPC procedure:
+await sendNotification(ctx.db, ctx.pubsub, { userId: targetUserId }, {
+  title: "Order shipped",
+  body: \\\`Your order #\\\${orderId} is on its way!\\\`,
+  actionUrl: \\\`/orders/\\\${orderId}\\\`,
+});
+\\\`\\\`\\\`
+
+### 2. Send from a background job
+
+Create a job handler following the Background Jobs pattern:
+
+\\\`\\\`\\\`typescript
+// Create a job handler for order shipped notifications
+import type PgBoss from "pg-boss";
+import { getDb, getConnectionString } from "../../db/index.js";
+import { PgPubSub } from "../../pubsub.js";
+import { sendNotification } from "../../services/notifications/index.js";
+
+export const ORDER_SHIPPED_JOB = "order-shipped";
+
+export async function registerOrderShippedHandler(boss: PgBoss): Promise<void> {
+  await boss.work(ORDER_SHIPPED_JOB, async ([job]) => {
+    const { userId, orderId } = job.data as { userId: string; orderId: string };
+    const db = getDb();
+    const pubsub = new PgPubSub(getConnectionString());
+
+    try {
+      await sendNotification(db, pubsub, { userId }, {
+        title: "Order shipped",
+        body: \\\`Your order #\\\${orderId} is on its way!\\\`,
+        actionUrl: \\\`/orders/\\\${orderId}\\\`,
+      });
+    } finally {
+      await pubsub.close();
+    }
+  });
+}
+\\\`\\\`\\\`
+
+Then register it in your jobs index:
+
+\\\`\\\`\\\`typescript
+import { registerOrderShippedHandler, ORDER_SHIPPED_JOB } from "./handlers/orderShipped.js";
+
+// In initJobs():
+await boss.createQueue(ORDER_SHIPPED_JOB);
+await registerOrderShippedHandler(boss);
+\\\`\\\`\\\`
+
+### 3. Enqueue from anywhere
+
+\\\`\\\`\\\`typescript
+import { enqueueJob } from "../jobs/index.js";
+import { ORDER_SHIPPED_JOB } from "../jobs/handlers/orderShipped.js";
+
+await enqueueJob(ORDER_SHIPPED_JOB, { userId, orderId });
+\\\`\\\`\\\`
+
+That's it. The notification service handles persistence, real-time sync, push delivery, opt-out checking, and stale token cleanup automatically.
+
+## Push Notification Setup
+
+Push notifications require credentials from Apple and Google, configured through Expo's EAS Build system.
+
+### Prerequisites (manual, one-time)
+
+1. **Apple Developer Account** — Required for APNs (Apple Push Notification service)
+   - Generate an APNs key (.p8 file) in the Apple Developer portal
+   - Note the Key ID and Team ID
+
+2. **Google Firebase project** — Required for FCM (Firebase Cloud Messaging)
+   - Create a Firebase project and download \\\`google-services.json\\\`
+   - Enable Cloud Messaging API
+
+3. **Expo account** — Required to proxy push through Expo's service
+   - Create a project at expo.dev
+   - Generate an access token
+
+### Env vars
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| \\\`PUSH_PROVIDER\\\` | No | Set to \\\`expo\\\` to enable real push delivery |
+| \\\`EXPO_ACCESS_TOKEN\\\` | When \\\`PUSH_PROVIDER=expo\\\` | Expo push service access token |
+
+## How to Test
+
+### Schema tests
+
+\\\`\\\`\\\`typescript
+// 18 tests covering all Zod schemas — validation, defaults, edge cases
+\\\`\\\`\\\`
+
+### Service tests
+
+\\\`\\\`\\\`typescript
+// 7 tests: single/multi/broadcast, opt-out, no tokens, DeviceNotRegistered cleanup, push failure resilience
+\\\`\\\`\\\`
+
+### Router tests
+
+\\\`\\\`\\\`typescript
+// 16 tests: pagination, auth, ownership, upsert, opt-out, unread count
+\\\`\\\`\\\`
+
+### Push adapter tests
+
+\\\`\\\`\\\`typescript
+// 11 tests: console (2), expo (6), factory (3)
+\\\`\\\`\\\`
+
+### Job handler tests
+
+\\\`\\\`\\\`typescript
+// 3 tests: happy path, pubsub cleanup, error handling
+\\\`\\\`\\\`
+
+Mock \\\`sendNotification\\\` in your own tests:
+
+\\\`\\\`\\\`typescript
+vi.mock("../../services/notifications/index.js", () => ({
+  sendNotification: vi.fn().mockResolvedValue({
+    notificationIds: ["notif-1"],
+    pushResults: { sent: 1, skipped: 0, failed: 0 },
+  }),
+}));
+\\\`\\\`\\\`
+
+## How to Debug
+
+- **Notifications not appearing?** Check that \\\`sendNotification()\\\` was called — look for the DB insert in Drizzle Studio (\\\`pnpm db:studio\\\`, \\\`notifications\\\` table).
+- **Toasts not showing?** Verify the NotificationToast component is mounted in your app layout and that the WebSocket subscription is connected (check browser DevTools network tab for WS frames on the notification channel).
+- **Push not delivered?** Check logs for "Push adapter: console" — means \\\`PUSH_PROVIDER\\\` is not set. For Expo, look for "Expo Push API error" or "Expo push ticket error" in logs.
+- **Push delivered but not received on device?** Verify the device token is in the \\\`push_tokens\\\` table. Check that \\\`pushOptOut\\\` is \\\`false\\\` for the user. On iOS, ensure push permissions were granted.
+- **Stale tokens?** They're cleaned automatically when Expo returns \\\`DeviceNotRegistered\\\`. Check logs for "Deleted stale push tokens".
+- **Welcome notification not sent on registration?** Check that the welcome notification queue was created in \\\`initJobs()\\\` and that \\\`enqueueJob\\\` is called in the user \\\`create\\\` mutation. Check pg-boss job state: \\\`SELECT * FROM pgboss.job WHERE name = 'welcome-notification'\\\`.`,
+  },
 ];
