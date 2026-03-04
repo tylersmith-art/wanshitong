@@ -16,14 +16,15 @@ export function getEmbeddingAdapter(): EmbeddingAdapter {
 
   switch (provider) {
     case "anthropic": {
-      if (!env.ANTHROPIC_API_KEY) {
+      const voyageKey = env.VOYAGE_API_KEY ?? env.ANTHROPIC_API_KEY;
+      if (!voyageKey) {
         throw new Error(
-          "EMBEDDING_PROVIDER=anthropic requires ANTHROPIC_API_KEY to be set",
+          "EMBEDDING_PROVIDER=anthropic requires VOYAGE_API_KEY (or ANTHROPIC_API_KEY) to be set",
         );
       }
-      getLogger().info("Embedding adapter: Anthropic/Voyage");
+      getLogger().info("Embedding adapter: Voyage");
       instance = createAnthropicEmbeddingAdapter({
-        apiKey: env.ANTHROPIC_API_KEY,
+        apiKey: voyageKey,
       });
       break;
     }
