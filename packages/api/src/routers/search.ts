@@ -71,9 +71,10 @@ export const searchRouter = router({
         }
       }
 
-      // 2. Embed the query text
+      // 2. Embed the query text (use "query" input_type for asymmetric retrieval)
       const embedResult = await getEmbeddingAdapter().embed({
         text: input.query,
+        inputType: "query",
       });
 
       if (!embedResult.success || !embedResult.embedding) {

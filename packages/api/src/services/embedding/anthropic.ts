@@ -24,7 +24,7 @@ export function createAnthropicEmbeddingAdapter(config: {
           body: JSON.stringify({
             model: VOYAGE_MODEL,
             input: [params.text],
-            input_type: "document",
+            input_type: params.inputType ?? "document",
           }),
         });
 

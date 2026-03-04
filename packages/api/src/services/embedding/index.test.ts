@@ -74,7 +74,7 @@ describe("getEmbeddingAdapter", () => {
     });
 
     expect(() => getEmbeddingAdapter()).toThrow(
-      "EMBEDDING_PROVIDER=anthropic requires ANTHROPIC_API_KEY",
+      "EMBEDDING_PROVIDER=anthropic requires VOYAGE_API_KEY (or ANTHROPIC_API_KEY) to be set",
     );
   });
 });

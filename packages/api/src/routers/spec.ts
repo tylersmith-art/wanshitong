@@ -9,6 +9,7 @@ import {
   type Spec,
 } from "@wanshitong/shared";
 import { router, publicProcedure, protectedProcedure } from "../trpc.js";
+import { adminProcedure } from "../middleware/requireRole.js";
 import { architectureSpecs, orgMembers } from "../db/schema.js";
 import { iterateEvents } from "../lib/iterateEvents.js";
 import { enqueueJob } from "../jobs/index.js";
@@ -260,6 +261,23 @@ export const specRouter = router({
       } satisfies SyncEvent<typeof deleted>);
 
       return { success: true };
+    }),
+
+  reEmbed: adminProcedure.mutation(async ({ ctx }) => {
+      const specs = await ctx.db
+        .select({ id: architectureSpecs.id })
+        .from(architectureSpecs);
+
+      for (const spec of specs) {
+        await ctx.db
+          .update(architectureSpecs)
+          .set({ embedding: null, embeddingStatus: "pending" })
+          .where(eq(architectureSpecs.id, spec.id));
+
+        await enqueueJob(GENERATE_SUMMARY, { specId: spec.id });
+      }
+
+      return { queued: specs.length };
     }),
 
   onSync: publicProcedure.subscription(async function* ({ ctx, signal }) {

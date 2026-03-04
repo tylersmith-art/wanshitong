@@ -186,7 +186,7 @@ describe("searchRouter", () => {
     expect(result.results[0].similarity).toBe(0.92);
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
 
-    expect(mockEmbed).toHaveBeenCalledWith({ text: "authentication" });
+    expect(mockEmbed).toHaveBeenCalledWith({ text: "authentication", inputType: "query" });
     expect(mockSearch).toHaveBeenCalledWith({
       embedding: [0.1, 0.2, 0.3],
       projectId: undefined,

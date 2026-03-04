@@ -21,7 +21,7 @@ describe("createAnthropicEmbeddingAdapter", () => {
     vi.unstubAllGlobals();
   });
 
-  it("sends correct payload to Voyage API", async () => {
+  it("sends correct payload to Voyage API (default document input_type)", async () => {
     const fakeEmbedding = new Array(1024).fill(0.1);
     mockFetch.mockResolvedValue({
       ok: true,
@@ -46,6 +46,31 @@ describe("createAnthropicEmbeddingAdapter", () => {
           model: "voyage-3",
           input: ["hello world"],
           input_type: "document",
+        }),
+      }),
+    );
+  });
+
+  it("sends query input_type when specified", async () => {
+    const fakeEmbedding = new Array(1024).fill(0.1);
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: [{ embedding: fakeEmbedding }],
+        usage: { total_tokens: 5 },
+      }),
+    });
+
+    const adapter = createAnthropicEmbeddingAdapter({ apiKey: "test-key" });
+    await adapter.embed({ text: "search query", inputType: "query" });
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      "https://api.voyageai.com/v1/embeddings",
+      expect.objectContaining({
+        body: JSON.stringify({
+          model: "voyage-3",
+          input: ["search query"],
+          input_type: "query",
         }),
       }),
     );
