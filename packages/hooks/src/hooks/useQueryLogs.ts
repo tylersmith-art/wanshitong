@@ -10,8 +10,6 @@ export function useQueryLogs(options?: { apiKeyId?: string }) {
     apiKeyId: options?.apiKeyId,
   });
 
-  const getById = trpc.queryLog.getById.useQuery;
-
   const goToNextPage = () => {
     if (listQuery.data?.nextCursor) {
       setCursor(listQuery.data.nextCursor);
@@ -30,6 +28,5 @@ export function useQueryLogs(options?: { apiKeyId?: string }) {
     goToNextPage,
     resetPagination,
     hasMore: !!listQuery.data?.nextCursor,
-    getById,
   };
 }

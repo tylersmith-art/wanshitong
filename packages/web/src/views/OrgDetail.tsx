@@ -12,7 +12,7 @@ export function OrgDetail() {
     useOrgMembers(id ?? "");
 
   const [userId, setUserId] = useState("");
-  const [role, setRole] = useState("member");
+  const [role, setRole] = useState<"member" | "admin" | "owner">("member");
 
   const handleAddMember = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -67,7 +67,7 @@ export function OrgDetail() {
           />
           <select
             value={role}
-            onChange={(e) => setRole(e.target.value)}
+            onChange={(e) => setRole(e.target.value as "member" | "admin" | "owner")}
             className="px-3 py-2 border border-gray-300 rounded text-sm"
           >
             <option value="member">Member</option>
@@ -119,7 +119,7 @@ export function OrgDetail() {
                         updateRole({
                           orgId: id!,
                           userId: member.userId,
-                          role: e.target.value,
+                          role: e.target.value as "member" | "admin" | "owner",
                         })
                       }
                       className="px-2 py-1 border border-gray-300 rounded text-sm"

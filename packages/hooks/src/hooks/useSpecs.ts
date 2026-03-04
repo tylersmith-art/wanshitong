@@ -7,7 +7,7 @@ type SerializedSpec = {
   description: string | null;
   content: string;
   summary: string | null;
-  visibility: string;
+  visibility: "user" | "org" | "global";
   orgId: string | null;
   userId: string;
   embeddingStatus: string;
@@ -15,7 +15,10 @@ type SerializedSpec = {
   updatedAt: string;
 };
 
-export function useSpecs(filters?: { visibility?: string; orgId?: string }) {
+export function useSpecs(filters?: {
+  visibility?: "user" | "org" | "global";
+  orgId?: string;
+}) {
   const utils = trpc.useUtils();
   const listQuery = trpc.spec.list.useQuery(filters);
 
