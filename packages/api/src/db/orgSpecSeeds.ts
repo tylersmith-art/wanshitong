@@ -1261,4 +1261,956 @@ export default defineConfig({
 - **Test isolation issues?** Use \\\`beforeEach(() => vi.clearAllMocks())\\\` to reset mock call counts. Use \\\`vi.restoreAllMocks()\\\` if you used \\\`spyOn\\\`.
 - **Want to run a single test?** Use the vitest CLI with the test file path or use \\\`.only\\\`: \\\`it.only("my test", ...)\\\`.`,
   },
+  {
+    name: 'Authentication Patterns',
+    description:
+      'Auth0 JWT verification, API key auth, dual auth support, mobile PKCE flow, and token verification middleware patterns.',
+    content: `# Authentication
+
+Auth0 is integrated across all three platforms. The web and mobile apps handle login flows and token management. The API verifies JWTs on every request.
+
+## Architecture
+
+\`\`\`
+Web (Auth0 React SDK)  --- Bearer token -->  API (jose JWKS verification)
+Mobile (expo-auth-session) --- Bearer token -->  API
+\`\`\`
+
+Tokens are audience-scoped JWTs signed by Auth0. The API fetches Auth0's JWKS to verify signatures -- no shared secret needed.
+
+## Web Authentication
+
+Auth0Provider wraps the entire app in the web entry point:
+
+\`\`\`typescript
+<Auth0Provider
+  domain={import.meta.env.VITE_AUTH0_DOMAIN}
+  clientId={import.meta.env.VITE_AUTH0_CLIENT_ID}
+  cacheLocation="localstorage"
+  authorizationParams={{
+    redirect_uri: window.location.origin,
+    audience: import.meta.env.VITE_AUTH0_AUDIENCE,
+  }}
+>
+\`\`\`
+
+\\\`cacheLocation="localstorage"\\\` ensures tokens persist across page redirects (the Auth0 login callback). Without it, tokens are stored in-memory and lost during the redirect, causing a race condition where \\\`getAccessTokenSilently()\\\` fails immediately after login.
+
+The \\\`TRPCProvider\\\` attaches tokens to every request and uses a \\\`splitLink\\\` to route subscriptions over WebSocket and queries/mutations over HTTP:
+
+\`\`\`typescript
+// hooks providers
+const wsClient = createWSClient({
+  url: deriveWsUrl(apiUrl),
+  connectionParams: async () => {
+    try {
+      const token = await getAccessToken();
+      return { token };
+    } catch {
+      return {};
+    }
+  },
+});
+
+return trpc.createClient({
+  links: [
+    splitLink({
+      condition: (op) => op.type === "subscription",
+      true: wsLink({ client: wsClient }),
+      false: httpBatchLink({
+        url: apiUrl,
+        async headers() {
+          try {
+            const token = await getAccessToken();
+            return { Authorization: \\\`Bearer \\\${token}\\\` };
+          } catch {
+            return {};
+          }
+        },
+      }),
+    }),
+  ],
+});
+\`\`\`
+
+HTTP requests send the token as a \\\`Bearer\\\` header. WebSocket connections send it via \\\`connectionParams\\\`, which the API reads in \\\`createWSContextFactory\\\`.
+
+**Using auth in components:**
+
+\`\`\`typescript
+import { useAuth0 } from "@auth0/auth0-react";
+
+function MyComponent() {
+  const { isAuthenticated, user, loginWithRedirect, logout } = useAuth0();
+  // user.email, user.name, user.picture, etc.
+}
+\`\`\`
+
+**Protecting a route:**
+
+\`\`\`typescript
+<Route
+  path="/profile"
+  element={
+    <AuthGuard>
+      <Profile />
+    </AuthGuard>
+  }
+/>
+\`\`\`
+
+\\\`AuthGuard\\\` redirects unauthenticated users to Auth0 login and shows a loading state while checking.
+
+## Mobile Authentication
+
+Uses \\\`expo-auth-session\\\` with PKCE flow. Tokens are stored in \\\`expo-secure-store\\\`.
+
+\`\`\`typescript
+import { getValidAccessToken } from "../lib/auth";
+
+// Auto-refreshes if expired (60s buffer)
+const token = await getValidAccessToken();
+\`\`\`
+
+The \\\`AuthContext\\\` provider wraps the app and exposes \\\`getAccessToken\\\` for tRPC.
+
+## API Verification
+
+\`\`\`typescript
+// API auth middleware
+import { createRemoteJWKSet, jwtVerify } from "jose";
+import { getEnv } from "../lib/env.js";
+
+let JWKS: ReturnType<typeof createRemoteJWKSet> | null = null;
+
+function getJWKS() {
+  if (!JWKS) {
+    const { AUTH0_ISSUER_BASE_URL } = getEnv();
+    JWKS = createRemoteJWKSet(
+      new URL(\\\`\\\${AUTH0_ISSUER_BASE_URL}/.well-known/jwks.json\\\`)
+    );
+  }
+  return JWKS;
+}
+
+export async function verifyToken(token: string): Promise<JWTPayload | null> {
+  try {
+    const { AUTH0_ISSUER_BASE_URL, AUTH0_AUDIENCE } = getEnv();
+    const { payload } = await jwtVerify(token, getJWKS(), {
+      issuer: \\\`\\\${AUTH0_ISSUER_BASE_URL}/\\\`,
+      audience: AUTH0_AUDIENCE,
+    });
+    return payload;
+  } catch {
+    return null;
+  }
+}
+\`\`\`
+
+The context factory extracts the Bearer token from the request and calls \\\`verifyToken\\\`. The result lands on \\\`ctx.user\\\`:
+
+\`\`\`typescript
+// API context creation
+const authHeader = req.headers.authorization;
+if (authHeader?.startsWith("Bearer ")) {
+  user = await verifyToken(authHeader.slice(7));
+}
+return { user, db, pubsub };
+\`\`\`
+
+## How to Implement Auth in a New Procedure
+
+Use \\\`protectedProcedure\\\` instead of \\\`publicProcedure\\\`:
+
+\`\`\`typescript
+import { protectedProcedure } from "../trpc.js";
+
+mySecureEndpoint: protectedProcedure.mutation(async ({ ctx }) => {
+  // ctx.user is the raw JWT payload (guaranteed non-null)
+  // ctx.dbUser is the users table row resolved from ctx.user.sub (may be null for new users)
+  const sub = ctx.user.sub; // Auth0 user ID (always present)
+  const dbUser = ctx.dbUser; // DB row or null
+  // ...
+}),
+\`\`\`
+
+> **Note:** \\\`ctx.user\\\` is the raw \\\`JWTPayload\\\` from \\\`jose\\\`. Auth0 access tokens with a custom audience only include standard claims (\\\`sub\\\`, \\\`iss\\\`, \\\`aud\\\`, \\\`exp\\\`) -- the \\\`email\\\` claim is NOT present. Use \\\`ctx.dbUser\\\` to get user details from the database. The middleware automatically looks up the user by \\\`sub\\\` on every authenticated request.
+
+> **Note:** \\\`ctx.dbUser\\\` is \\\`null\\\` for brand-new users who haven't called \\\`user.create\\\` yet. Routes that require a DB user should check for this (e.g., notification routes throw \\\`NOT_FOUND\\\`).
+
+For public endpoints that optionally use auth:
+
+\`\`\`typescript
+maybeAuthEndpoint: publicProcedure.query(async ({ ctx }) => {
+  if (ctx.user) {
+    // authenticated -- personalize
+  } else {
+    // anonymous -- return public data
+  }
+}),
+\`\`\`
+
+## How to Test
+
+Mock both \\\`getEnv\\\` and \\\`jose\\\` -- the auth middleware calls \\\`getEnv()\\\` at runtime to read env vars, so you mock the module rather than setting \\\`process.env\\\` directly:
+
+\`\`\`typescript
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+vi.mock("../lib/env.js", () => ({
+  getEnv: vi.fn(() => ({
+    AUTH0_ISSUER_BASE_URL: "https://test.auth0.com",
+    AUTH0_AUDIENCE: "https://api.test.com",
+  })),
+}));
+
+vi.mock("jose", () => ({
+  createRemoteJWKSet: vi.fn(() => "mock-jwks"),
+  jwtVerify: vi.fn(),
+}));
+
+import { verifyToken } from "./auth.js";
+import { jwtVerify } from "jose";
+
+const mockJwtVerify = vi.mocked(jwtVerify);
+
+describe("verifyToken", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns payload for valid token", async () => {
+    mockJwtVerify.mockResolvedValueOnce({
+      payload: { sub: "user123", email: "test@example.com" },
+      protectedHeader: { alg: "RS256" },
+    } as any);
+
+    const result = await verifyToken("valid-token");
+    expect(result).toEqual({ sub: "user123", email: "test@example.com" });
+  });
+
+  it("returns null for invalid token", async () => {
+    mockJwtVerify.mockRejectedValueOnce(new Error("invalid"));
+    expect(await verifyToken("bad")).toBeNull();
+  });
+});
+\`\`\`
+
+For router tests, mock the whole auth chain and pass \\\`user\\\` directly in the context:
+
+\`\`\`typescript
+const caller = appRouter.createCaller({
+  user: { sub: "user1", email: "test@test.com" },  // or null for unauthenticated
+  db: mockDb as any,
+  pubsub: mockPubsub as any,
+});
+\`\`\`
+
+## How to Debug
+
+- **401 on every request?** Check that \\\`AUTH0_ISSUER_BASE_URL\\\` and \\\`AUTH0_AUDIENCE\\\` env vars match your Auth0 config. The audience must match exactly.
+- **Token not sent?** Open DevTools Network tab, check the Authorization header on tRPC requests. If missing, the \\\`getAccessToken()\\\` call in TRPCProvider is failing silently -- it catches errors and returns empty headers.
+- **"Invalid audience" from jose?** The audience in the JWT must match \\\`AUTH0_AUDIENCE\\\` exactly. Check with \\\`jwt.io\\\` to decode the token and compare.
+- **JWKS fetch fails?** The API needs outbound HTTPS access to \\\`{AUTH0_ISSUER_BASE_URL}/.well-known/jwks.json\\\`. Check DNS/firewall if in a restricted environment.
+- **Mobile token expired?** \\\`getValidAccessToken()\\\` auto-refreshes with a 60s buffer, but if the refresh token is also expired, it throws. Catch it and re-prompt login.`,
+  },
+  {
+    name: 'Roles & Permissions',
+    description:
+      'RBAC with two roles (user and admin), enforced via tRPC middleware. Includes admin claiming for first-time setup and role management procedures.',
+    content: `# Roles & Permissions
+
+Two roles: \\\`user\\\` (default) and \\\`admin\\\`. Roles live in the database on the \\\`users\\\` table, validated with Zod schemas, and enforced via tRPC middleware.
+
+## How It Works
+
+\`\`\`
+JWT (sub claim) -> protectedProcedure resolves ctx.dbUser -> adminProcedure checks role
+\`\`\`
+
+The \\\`protectedProcedure\\\` middleware resolves \\\`ctx.dbUser\\\` from the JWT \\\`sub\\\` claim on every authenticated request. The \\\`adminProcedure\\\` then simply checks the role:
+
+\`\`\`typescript
+// API role middleware
+export const adminProcedure = protectedProcedure.use(async ({ ctx, next }) => {
+  if (!ctx.dbUser || ctx.dbUser.role !== "admin") {
+    throw new TRPCError({ code: "FORBIDDEN", message: "Admin access required" });
+  }
+
+  return next({ ctx });
+});
+\`\`\`
+
+No redundant DB query -- \\\`ctx.dbUser\\\` was already resolved by \\\`protectedProcedure\\\`.
+
+## First Admin Setup
+
+When the project is first deployed, no admin exists. The \\\`claimAdmin\\\` mutation lets the first authenticated user promote themselves.
+
+Note: Both \\\`claimAdmin\\\` and \\\`adminProcedure\\\` use \\\`BAD_REQUEST\\\` for a missing email -- a JWT without an email claim is a malformed request, not an access control issue. \\\`FORBIDDEN\\\` is reserved for authenticated users who lack the required role.
+
+\`\`\`typescript
+// Admin router
+claimAdmin: protectedProcedure.mutation(async ({ ctx }) => {
+  const email = ctx.user?.email as string | undefined;
+  if (!email) throw new TRPCError({ code: "BAD_REQUEST", message: "No email in token" });
+
+  // Check if any admin exists
+  const admins = await ctx.db.select().from(users).where(eq(users.role, "admin")).limit(1);
+  if (admins.length > 0) throw new TRPCError({ code: "FORBIDDEN", message: "An admin already exists" });
+
+  // Promote caller
+  const [updated] = await ctx.db.update(users)
+    .set({ role: "admin" })
+    .where(eq(users.email, email))
+    .returning();
+  if (!updated) throw new TRPCError({ code: "NOT_FOUND", message: "User not found. Create your account first." });
+  return updated;
+});
+\`\`\`
+
+After that, admins manage roles via the admin page or the \\\`admin.updateRole\\\` mutation.
+
+## Existing Admin Endpoints
+
+| Procedure | Access | What it does |
+|---|---|---|
+| \\\`admin.claimAdmin\\\` | \\\`protectedProcedure\\\` | Promotes caller to admin if no admin exists |
+| \\\`admin.listUsers\\\` | \\\`adminProcedure\\\` | Returns all users with roles |
+| \\\`admin.updateRole\\\` | \\\`adminProcedure\\\` | Sets a user's role by email |
+
+## How to Implement a New Role
+
+### 1. Add the role to the schema
+
+\`\`\`typescript
+// In the shared schemas package
+export const RoleSchema = z.enum(["user", "admin", "moderator"]);
+\`\`\`
+
+### 2. Create a procedure middleware
+
+\`\`\`typescript
+// API role middleware
+export const moderatorProcedure = protectedProcedure.use(async ({ ctx, next }) => {
+  if (!ctx.dbUser || !["admin", "moderator"].includes(ctx.dbUser.role)) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "Moderator access required" });
+  }
+
+  return next({ ctx });
+});
+\`\`\`
+
+### 3. Use it in a router
+
+\`\`\`typescript
+deleteComment: moderatorProcedure
+  .input(z.object({ commentId: z.string().uuid() }))
+  .mutation(async ({ ctx, input }) => {
+    // only admins and moderators reach here
+  }),
+\`\`\`
+
+### 4. Update the admin panel
+
+In the admin view, add the new role to the \\\`ROLES\\\` array:
+
+\`\`\`typescript
+const ROLES = ["user", "moderator", "admin"] as const;
+\`\`\`
+
+## How to Test
+
+\`\`\`typescript
+import { describe, it, expect, vi } from "vitest";
+
+vi.mock("../db/index.js", () => ({
+  getConnectionString: vi.fn(() => "postgresql://mock"),
+  getDb: vi.fn(() => ({})),
+}));
+vi.mock("jose", () => ({
+  createRemoteJWKSet: vi.fn(() => "mock"),
+  jwtVerify: vi.fn().mockResolvedValue({
+    payload: { sub: "u1", email: "admin@test.com" },
+    protectedHeader: { alg: "RS256" },
+  }),
+}));
+
+import { appRouter } from "./index.js";
+
+it("listUsers requires admin role", async () => {
+  const mockDb = {
+    select: vi.fn().mockReturnThis(),
+    from: vi.fn().mockReturnThis(),
+    where: vi.fn().mockReturnThis(),
+    limit: vi.fn().mockResolvedValue([{ email: "admin@test.com", role: "user" }]),
+    orderBy: vi.fn().mockResolvedValue([]),
+  };
+
+  const caller = appRouter.createCaller({
+    user: { sub: "u1", email: "admin@test.com" },
+    db: mockDb as any,
+    pubsub: {} as any,
+  });
+
+  await expect(caller.admin.listUsers()).rejects.toThrow("FORBIDDEN");
+});
+
+it("listUsers succeeds for admin", async () => {
+  const mockDb = {
+    select: vi.fn().mockReturnThis(),
+    from: vi.fn().mockReturnThis(),
+    where: vi.fn().mockReturnThis(),
+    limit: vi.fn().mockResolvedValue([{ email: "admin@test.com", role: "admin" }]),
+    orderBy: vi.fn().mockResolvedValue([]),
+  };
+
+  const caller = appRouter.createCaller({
+    user: { sub: "u1", email: "admin@test.com" },
+    db: mockDb as any,
+    pubsub: {} as any,
+  });
+
+  const result = await caller.admin.listUsers();
+  expect(result).toEqual([]);
+});
+\`\`\`
+
+## How to Debug
+
+- **"Admin access required" but you are admin?** The middleware looks up the user by \\\`sub\\\` from the JWT. Make sure the \\\`sub\\\` column in the \\\`users\\\` table matches your Auth0 user ID. Decode your token at jwt.io to check the \\\`sub\\\` claim.
+- **claimAdmin says "An admin already exists"?** Check \\\`users\\\` table for any row with \\\`role = 'admin'\\\`. Use Drizzle Studio: \\\`pnpm db:studio\\\`.
+- **claimAdmin says "User not found"?** Your Auth0 account email must already exist in the \\\`users\\\` table. Create a user first (via the Users page) with the same email as your Auth0 login.
+- **New role not showing in Admin panel?** Make sure you added it to the \\\`ROLES\\\` array in the admin view and to \\\`RoleSchema\\\` in the shared package, then rebuild: \\\`pnpm build\\\`.`,
+  },
+  {
+    name: 'Rate Limiting',
+    description:
+      'Per-IP request throttling using express-rate-limit. Applied globally to all Express routes with a configurable threshold and a stricter limiter for sensitive endpoints.',
+    content: `# Rate Limiting
+
+Per-IP request throttling using \\\`express-rate-limit\\\`. Applied globally to all Express routes. A stricter limiter is available for sensitive endpoints.
+
+## What's Configured
+
+\`\`\`typescript
+// API rate limit middleware
+import rateLimit from "express-rate-limit";
+import { getEnv } from "../lib/env.js";
+
+let cachedGlobalLimiter: ReturnType<typeof rateLimit> | null = null;
+
+export function getGlobalLimiter() {
+  if (!cachedGlobalLimiter) {
+    cachedGlobalLimiter = rateLimit({
+      windowMs: 15 * 60 * 1000,  // 15 minutes
+      max: parseInt(getEnv().RATE_LIMIT_MAX, 10),
+      standardHeaders: true,
+      legacyHeaders: false,
+      message: { error: "Too many requests, please try again later." },
+    });
+  }
+  return cachedGlobalLimiter;
+}
+
+export const strictLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many requests, please try again later." },
+});
+\`\`\`
+
+The global limiter is applied in the API entry point after CORS:
+
+\`\`\`typescript
+app.use(getGlobalLimiter());
+\`\`\`
+
+Every response includes standard rate limit headers. With \\\`express-rate-limit\\\` v7 and \\\`standardHeaders: true\\\`, the library uses the IETF draft-6 combined \\\`RateLimit\\\` header format. The exact header names depend on the installed version -- v7 may send a single \\\`RateLimit\\\` header instead of three separate \\\`RateLimit-*\\\` headers.
+
+## How to Implement
+
+### Apply strict limiting to a specific route
+
+\`\`\`typescript
+// API entry point
+import { strictLimiter } from "./middleware/rateLimit.js";
+
+app.use("/api/trpc/admin.updateRole", strictLimiter);
+\`\`\`
+
+### Create a custom limiter
+
+\`\`\`typescript
+import rateLimit from "express-rate-limit";
+
+export const authLimiter = rateLimit({
+  windowMs: 60 * 1000,  // 1 minute
+  max: 5,               // 5 attempts per minute
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many login attempts." },
+});
+\`\`\`
+
+### Adjust the global limit
+
+Set \\\`RATE_LIMIT_MAX\\\` in your \\\`.env\\\` file:
+
+\`\`\`
+RATE_LIMIT_MAX=200
+\`\`\`
+
+## How to Test
+
+Rate limiting is Express middleware, not tRPC middleware, so it doesn't show up in \\\`createCaller()\\\` tests. Test it with HTTP requests:
+
+\`\`\`typescript
+import { describe, it, expect } from "vitest";
+import express from "express";
+import request from "supertest";
+import { getGlobalLimiter } from "./rateLimit.js";
+
+describe("getGlobalLimiter", () => {
+  const app = express();
+  app.use(getGlobalLimiter());
+  app.get("/test", (_req, res) => res.json({ ok: true }));
+
+  it("includes rate limit headers", async () => {
+    const res = await request(app).get("/test");
+    expect(res.headers["ratelimit-limit"]).toBeDefined();
+    expect(res.headers["ratelimit-remaining"]).toBeDefined();
+  });
+});
+\`\`\`
+
+Or verify headers manually with curl:
+
+\`\`\`bash
+curl -i http://localhost:3001/api/health
+# Look for RateLimit-Limit, RateLimit-Remaining, RateLimit-Reset headers
+\`\`\`
+
+## How to Debug
+
+- **Rate limit headers missing?** Make sure \\\`getGlobalLimiter()\\\` is applied before the tRPC middleware in the API entry point. Express middleware runs in order.
+- **Getting rate limited in development?** Increase \\\`RATE_LIMIT_MAX\\\` in your \\\`.env\\\` or set it to a high value like \\\`10000\\\` for local development.
+- **Rate limiting doesn't work behind a proxy?** By default, \\\`express-rate-limit\\\` uses \\\`req.ip\\\`. If behind nginx or a load balancer, set \\\`app.set('trust proxy', 1)\\\` in the API entry point so it reads \\\`X-Forwarded-For\\\`.
+- **429 errors in tests?** Rate limit state persists across requests within the same test process. Create a fresh Express app per test or use a separate limiter instance.`,
+  },
+  {
+    name: 'Environment Validation',
+    description:
+      'All required env vars are validated at startup with a Zod schema before anything else runs. Provides a typed getEnv() accessor used throughout the API.',
+    content: `# Environment Validation
+
+All required env vars are validated at startup with Zod before anything else runs. If a variable is missing or invalid, the server prints field-level errors and exits immediately.
+
+## What's Validated
+
+\`\`\`typescript
+// API env module
+const envSchema = z.object({
+  DATABASE_URL: z.string().url("DATABASE_URL must be a valid URL"),
+  AUTH0_ISSUER_BASE_URL: z.string().url("AUTH0_ISSUER_BASE_URL must be a valid URL"),
+  AUTH0_AUDIENCE: z.string().url("AUTH0_AUDIENCE must be a valid URL"),
+  PORT: z.string().default("3001"),
+  CORS_ORIGIN: z.string().default("http://localhost:3000"),
+  RATE_LIMIT_MAX: z.string().default("100"),
+  NODE_ENV: z.string().default("development"),
+  LOG_LEVEL: z.string().default("info"),
+});
+\`\`\`
+
+Called at the very top of the API entry point, before any other imports:
+
+\`\`\`typescript
+import "dotenv/config";
+import { validateEnv } from "./lib/env.js";
+const env = validateEnv();
+// everything else uses env.PORT, env.CORS_ORIGIN, etc.
+\`\`\`
+
+On failure, you get clear output:
+
+\`\`\`
+Environment validation failed:
+  DATABASE_URL: DATABASE_URL must be a valid URL
+  AUTH0_ISSUER_BASE_URL: Required
+\`\`\`
+
+## How to Implement
+
+### Add a new env var
+
+\`\`\`typescript
+// API env module
+const envSchema = z.object({
+  // ...existing vars...
+  STRIPE_SECRET_KEY: z.string().min(1, "STRIPE_SECRET_KEY is required"),
+  SENDGRID_API_KEY: z.string().optional(),  // optional -- won't block startup
+});
+\`\`\`
+
+Then use it anywhere in the API:
+
+\`\`\`typescript
+import { getEnv } from "../lib/env.js";
+
+const env = getEnv();
+const stripe = new Stripe(env.STRIPE_SECRET_KEY);
+\`\`\`
+
+### Add it to your .env
+
+\`\`\`
+STRIPE_SECRET_KEY=sk_test_...
+\`\`\`
+
+### Add it to K8s secrets
+
+Update your env file and redeploy.
+
+## How to Test
+
+\`\`\`typescript
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { validateEnv } from "./env.js";
+
+describe("validateEnv", () => {
+  beforeEach(() => vi.restoreAllMocks());
+
+  it("returns parsed env for valid input", () => {
+    vi.stubEnv("DATABASE_URL", "postgresql://user:pass@localhost:5432/db");
+    vi.stubEnv("AUTH0_ISSUER_BASE_URL", "https://example.auth0.com");
+    vi.stubEnv("AUTH0_AUDIENCE", "https://api.example.com");
+
+    const env = validateEnv();
+    expect(env.DATABASE_URL).toBe("postgresql://user:pass@localhost:5432/db");
+    expect(env.PORT).toBe("3001");          // default
+    expect(env.CORS_ORIGIN).toBe("http://localhost:3000");  // default
+  });
+
+  it("exits on missing required vars", () => {
+    vi.stubEnv("DATABASE_URL", "");
+    vi.stubEnv("AUTH0_ISSUER_BASE_URL", "");
+    vi.stubEnv("AUTH0_AUDIENCE", "");
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("process.exit called");
+    });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    expect(() => validateEnv()).toThrow("process.exit called");
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+});
+\`\`\`
+
+Key pattern: mock \\\`process.exit\\\` to throw (so the test doesn't actually exit), then assert it was called with \\\`1\\\`.
+
+## How to Debug
+
+- **Server exits immediately on startup?** Check the console output for "Environment validation failed" and the specific field errors. Most common: missing \\\`.env\\\` file or a var not set.
+- **"validateEnv() must be called first" error?** Something is calling \\\`getEnv()\\\` before \\\`validateEnv()\\\` runs. Make sure \\\`validateEnv()\\\` is the first thing in the entry point after \\\`dotenv/config\\\`.
+- **Valid URL but still failing?** Zod's \\\`z.string().url()\\\` requires a full URL with protocol. \\\`example.com\\\` fails -- it needs \\\`https://example.com\\\`.
+- **Different behavior locally vs production?** Check that your K8s secret has all required vars.`,
+  },
+  {
+    name: 'Structured Logging',
+    description:
+      'Pino logger with pino-http request middleware. Pretty-printed in development, JSON in production. Configurable log levels via LOG_LEVEL env var.',
+    content: `# Structured Logging
+
+All API logging uses Pino. Pretty-printed in development, JSON in production. Request logging is automatic.
+
+## Setup
+
+\`\`\`typescript
+// API logger module
+import pino from "pino";
+import { getEnv } from "./env.js";
+
+let cachedLogger: pino.Logger | null = null;
+
+export function getLogger() {
+  if (!cachedLogger) {
+    const env = getEnv();
+    cachedLogger = pino({
+      level: env.LOG_LEVEL,
+      ...(env.NODE_ENV !== "production" && {
+        transport: {
+          target: "pino-pretty",
+          options: { colorize: true },
+        },
+      }),
+    });
+  }
+  return cachedLogger;
+}
+\`\`\`
+
+Request logging via pino-http:
+
+\`\`\`typescript
+// API request logger middleware
+import type { IncomingMessage, ServerResponse } from "node:http";
+import pinoHttp from "pino-http";
+import type { HttpLogger } from "pino-http";
+import { getLogger } from "../lib/logger.js";
+
+let cachedRequestLogger: HttpLogger | null = null;
+
+export function getRequestLogger(): HttpLogger {
+  if (!cachedRequestLogger) {
+    cachedRequestLogger = pinoHttp({
+      logger: getLogger(),
+      customLogLevel(_req: IncomingMessage, res: ServerResponse, err: Error | undefined) {
+        if (res.statusCode >= 500 || err) return "error";
+        if (res.statusCode >= 400) return "warn";
+        return "info";
+      },
+      autoLogging: {
+        ignore(req: IncomingMessage) {
+          return req.url === "/api/health";  // skip health checks
+        },
+      },
+    });
+  }
+  return cachedRequestLogger;
+}
+\`\`\`
+
+## How to Implement
+
+### Use the logger in your code
+
+\`\`\`typescript
+import { getLogger } from "../lib/logger.js";
+
+// Structured data as first arg, message as second
+getLogger().info({ userId: "abc", action: "login" }, "User logged in");
+getLogger().warn({ attempts: 3 }, "Rate limit approaching");
+getLogger().error({ err, requestId }, "Failed to process payment");
+\`\`\`
+
+**Do not use \\\`console.log\\\`** in API code. Use \\\`getLogger()\\\` for consistent structured output.
+
+### Log levels
+
+| Level | When to use |
+|---|---|
+| \\\`error\\\` | Something broke. Needs attention. |
+| \\\`warn\\\` | Unexpected but handled. Worth monitoring. |
+| \\\`info\\\` | Normal operations. User actions, lifecycle events. |
+| \\\`debug\\\` | Detailed troubleshooting info. Not shown by default. |
+| \\\`trace\\\` | Very verbose. Function entry/exit, data dumps. |
+
+### Change log level at runtime
+
+Set \\\`LOG_LEVEL\\\` env var:
+
+\`\`\`
+LOG_LEVEL=debug  # shows debug + info + warn + error
+LOG_LEVEL=warn   # shows only warn + error
+\`\`\`
+
+### Child loggers for context
+
+\`\`\`typescript
+const jobLogger = getLogger().child({ module: "jobs", jobType: "email" });
+jobLogger.info({ to: "user@test.com" }, "Sending email");
+// output includes module and jobType on every line
+\`\`\`
+
+## Development Output
+
+\`\`\`
+[10:32:15.123] INFO: API server listening on http://localhost:3001
+[10:32:15.124] INFO: WebSocket server listening on ws://localhost:3001/api/trpc
+[10:32:16.456] INFO: POST /api/trpc/user.create 200 12ms
+[10:32:17.789] WARN: GET /api/trpc/admin.listUsers 403 3ms
+\`\`\`
+
+## Production Output
+
+\`\`\`json
+{"level":30,"time":1707600735123,"msg":"API server listening on http://localhost:3001"}
+{"level":30,"time":1707600736456,"req":{"method":"POST","url":"/api/trpc/user.create"},"res":{"statusCode":200},"responseTime":12,"msg":"request completed"}
+\`\`\`
+
+Pipe to any JSON log aggregator (Datadog, Grafana Loki, CloudWatch, etc.).
+
+## How to Test
+
+Logger output doesn't need to be tested directly. For code that uses the logger, either:
+
+1. Let it log (Vitest captures stdout)
+2. Mock it if you want to assert on log calls:
+
+\`\`\`typescript
+const mockLogger = {
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+  child: vi.fn().mockReturnThis(),
+};
+
+vi.mock("../lib/logger.js", () => ({
+  getLogger: () => mockLogger,
+}));
+
+import { getLogger } from "../lib/logger.js";
+
+it("logs job processing", async () => {
+  // ... trigger the code ...
+  expect(getLogger().info).toHaveBeenCalledWith(
+    expect.objectContaining({ jobId: expect.any(String) }),
+    "Processing example job",
+  );
+});
+\`\`\`
+
+## How to Debug
+
+- **No log output?** Check \\\`LOG_LEVEL\\\`. If set to \\\`warn\\\`, \\\`info\\\` messages won't appear. Default is \\\`info\\\`.
+- **Logs are JSON in development?** \\\`pino-pretty\\\` is a devDependency. Make sure \\\`NODE_ENV\\\` is not set to \\\`production\\\` in your \\\`.env\\\`. If unset, it defaults to \\\`development\\\`.
+- **Request logs show "undefined" for URL?** Make sure \\\`getRequestLogger()\\\` middleware is applied before route handlers in the API entry point.
+- **Health check spam in logs?** The request logger already ignores \\\`/api/health\\\`. If you add other health/readiness endpoints, add them to the \\\`ignore\\\` function in the request logger middleware.
+- **Want to see debug logs?** Set \\\`LOG_LEVEL=debug\\\` in your \\\`.env\\\` and restart.`,
+  },
+  {
+    name: 'CI/CD Patterns',
+    description:
+      'GitHub Actions workflows for CI (build + typecheck + test on PRs) and path-filtered deploys (API, web, infra) on push to main.',
+    content: `# CI/CD
+
+GitHub Actions handles both PR checks and production deploys. All workflows run on a self-hosted runner.
+
+## CI Workflow (Pull Requests)
+
+\`\`\`yaml
+# CI workflow
+name: CI
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  ci:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - run: corepack enable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm typecheck
+      - run: pnpm test
+\`\`\`
+
+Every PR to \\\`main\\\` must pass build + typecheck + tests before merging.
+
+## Deploy Workflows (Push to Main)
+
+Three workflows, each with path filters so only affected packages deploy. All three also support \\\`workflow_dispatch\\\` for manual triggers:
+
+### deploy-api
+
+Triggers on changes to API or shared packages:
+1. Builds Docker image tagged with git SHA
+2. Creates K8s secret from env file
+3. Applies K8s deployment manifest
+4. Waits for rollout (120s timeout)
+
+### deploy-web
+
+Triggers on changes to web, hooks, or shared packages:
+1. Loads \\\`VITE_*\\\` env vars from env file
+2. Builds Docker image with Vite build args, tagged with git SHA
+3. Applies K8s deployment manifest
+4. Waits for rollout (120s timeout)
+
+### deploy-infra
+
+Triggers on changes to K8s manifests. Manages the PostgreSQL secret and deploys the PostgreSQL K8s deployment. Waits for rollout (120s timeout).
+
+## How to Implement
+
+### Add a new CI step
+
+Edit the CI workflow. Example -- add a lint step:
+
+\`\`\`yaml
+      - run: pnpm build
+      - run: pnpm typecheck
+      - run: pnpm lint        # add here
+      - run: pnpm test
+\`\`\`
+
+### Add a new deploy workflow
+
+Create a new file in the workflows directory:
+
+\`\`\`yaml
+name: Deploy Worker
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/worker/**"
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set environment variables
+        run: |
+          echo "REPO_NAME=$(basename $GITHUB_REPOSITORY)" >> $GITHUB_ENV
+          echo "GIT_SHA=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+      - name: Build Docker image
+        run: docker build -f packages/worker/Dockerfile -t \\\${{ env.REPO_NAME }}-worker:\\\${{ env.GIT_SHA }} .
+      - name: Deploy to Kubernetes
+        run: |
+          sed -e "s|<REPO_NAME>|\\\${{ env.REPO_NAME }}|g" \\\\
+              -e "s|<IMAGE_NAME>|\\\${{ env.REPO_NAME }}-worker:\\\${{ env.GIT_SHA }}|g" \\\\
+              .k8s/worker-deployment.yml | kubectl apply -f -
+      - name: Verify rollout
+        run: kubectl rollout status deployment/\\\${{ env.REPO_NAME }}-worker --timeout=120s
+\`\`\`
+
+### Add a script to CI
+
+1. Add the script to the relevant \\\`package.json\\\`
+2. Add a Turbo task in \\\`turbo.json\\\` if it should run across packages
+3. Add the step to the CI workflow
+
+## How to Test
+
+CI changes are tested by creating a PR. The workflow triggers automatically.
+
+To test locally before pushing:
+
+\`\`\`bash
+pnpm build && pnpm typecheck && pnpm test
+\`\`\`
+
+This mirrors exactly what CI runs.
+
+## How to Debug
+
+- **CI failed on "pnpm install"?** Usually a lockfile mismatch. Run \\\`pnpm install\\\` locally and commit the updated \\\`pnpm-lock.yaml\\\`.
+- **Build passes locally but fails in CI?** CI uses \\\`--frozen-lockfile\\\`, which is stricter. Also check for OS-specific issues (CI runs on macOS/ARM via the self-hosted runner).
+- **Deploy succeeded but app is broken?** Check pod logs on the cluster. The rollout status check only verifies pods are running, not that the app is healthy.
+- **Workflow didn't trigger?** Check the path filters. Changes to shared packages trigger both API and web deploys. Changes to hooks trigger web deploy. Changes outside the packages directory don't trigger any deploy. All deploy workflows also support \\\`workflow_dispatch\\\` for manual runs.
+- **All workflows queue sequentially?** The self-hosted runner is a single machine -- only one job runs at a time. Workflows across all repos queue. This is by design.
+- **Rollout timeout (120s)?** Usually means the pod is crash-looping. Check logs with \\\`--previous\\\` flag to see the crash output.
+- **K8s secret issues?** The env file must exist on the runner. If it's missing, the init script wasn't run for this project.`,
+  },
 ];
