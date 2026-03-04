@@ -1,5 +1,6 @@
 import { useAuth0 } from "@auth0/auth0-react";
 import { Link } from "react-router-dom";
+import { CodeBlock } from "../components/CodeBlock.js";
 
 export function Home() {
   const { isAuthenticated, loginWithRedirect } = useAuth0();
@@ -57,6 +58,81 @@ export function Home() {
           <p className="text-gray-500 text-sm leading-relaxed">
             Attach specs to projects. Each project gets its own curated
             knowledge base.
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-16 text-left max-w-2xl mx-auto">
+        <h2 className="text-3xl font-bold text-center mb-8">Quick Start</h2>
+
+        <div className="mb-8">
+          <p className="text-lg font-semibold mb-2">1. Create an account</p>
+          {isAuthenticated ? (
+            <p className="text-green-600 font-medium">
+              &#10003; You're signed in!
+            </p>
+          ) : (
+            <p className="text-gray-600">
+              Sign up for a free account to get started.{" "}
+              <button
+                onClick={() => loginWithRedirect()}
+                className="text-indigo-600 underline cursor-pointer bg-transparent border-none p-0 font-inherit"
+              >
+                Sign up
+              </button>
+            </p>
+          )}
+        </div>
+
+        <div className="mb-8">
+          <p className="text-lg font-semibold mb-2">2. Get an API key</p>
+          <p className="text-gray-600">
+            Generate an API key from your{" "}
+            <Link to="/api-keys" className="text-indigo-600 underline">
+              dashboard
+            </Link>
+            .
+          </p>
+        </div>
+
+        <div className="mb-8">
+          <p className="text-lg font-semibold mb-2">3. Install the CLI</p>
+          <CodeBlock
+            code="brew tap tylersmith-art/wst && brew install wst"
+            language="bash"
+          />
+          <p className="text-gray-600 mt-2">
+            Or install with npm:{" "}
+            <code className="bg-gray-100 px-1.5 py-0.5 rounded text-sm">
+              npm install -g @wanshitong/cli
+            </code>
+          </p>
+        </div>
+
+        <div className="mb-8">
+          <p className="text-lg font-semibold mb-2">
+            4. Initialize your project
+          </p>
+          <CodeBlock
+            code="wst init my-project --key <your-api-key>"
+            language="bash"
+          />
+          <p className="text-gray-600 mt-2">
+            This caches your API key and injects architecture guidance into
+            CLAUDE.md.
+          </p>
+        </div>
+
+        <div className="mb-8">
+          <p className="text-lg font-semibold mb-2">
+            5. Search your architecture
+          </p>
+          <CodeBlock
+            code='wst arc "how to handle authentication"'
+            language="bash"
+          />
+          <p className="text-gray-600 mt-2">
+            Returns relevant architecture docs ranked by semantic similarity.
           </p>
         </div>
       </div>
