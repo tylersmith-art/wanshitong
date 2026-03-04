@@ -8,6 +8,8 @@ const client = postgres(connectionString, { max: 1 });
 const db = drizzle(client);
 
 async function main() {
+  console.log("Ensuring pgvector extension...");
+  await client`CREATE EXTENSION IF NOT EXISTS vector`;
   console.log("Running migrations...");
   await migrate(db, { migrationsFolder: "./drizzle" });
   console.log("Migrations complete.");

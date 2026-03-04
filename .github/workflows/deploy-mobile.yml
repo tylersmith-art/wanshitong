@@ -8,11 +8,11 @@ on:
         required: false
         default: "false"
         type: boolean
-  push:
-    branches: [main]
-    paths:
-      - "packages/mobile/**"
-      - "packages/shared/**"
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - "packages/mobile/**"
+  #     - "packages/shared/**"
 
 jobs:
   deploy:
