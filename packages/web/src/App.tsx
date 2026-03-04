@@ -15,6 +15,8 @@ import { SpecEditor } from "./views/SpecEditor.js";
 import { Projects } from "./views/Projects.js";
 import { ProjectDetail } from "./views/ProjectDetail.js";
 import { Admin } from "./views/Admin.js";
+import { Search } from "./views/Search.js";
+import { QueryLogs } from "./views/QueryLogs.js";
 import { AuthGuard } from "./components/AuthGuard.js";
 
 function SessionSync() {
@@ -127,10 +129,26 @@ export function App() {
             }
           />
           <Route
+            path="/search"
+            element={
+              <AuthGuard>
+                <Search />
+              </AuthGuard>
+            }
+          />
+          <Route
             path="/admin"
             element={
               <AuthGuard>
                 <Admin />
+              </AuthGuard>
+            }
+          />
+          <Route
+            path="/admin/query-logs"
+            element={
+              <AuthGuard>
+                <QueryLogs />
               </AuthGuard>
             }
           />

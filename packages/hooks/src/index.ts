@@ -10,4 +10,6 @@ export { useProjectSpecs } from "./hooks/useProjectSpecs.js";
 export { useNotifications } from "./hooks/useNotifications.js";
 export { useNotificationToast } from "./hooks/useNotificationToast.js";
 export { useSessionSync } from "./hooks/useSessionSync.js";
+export { useSearch } from "./hooks/useSearch.js";
+export { useQueryLogs } from "./hooks/useQueryLogs.js";
 export { useSyncSubscription } from "./lib/useSyncSubscription.js";
