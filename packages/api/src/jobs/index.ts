@@ -27,10 +27,20 @@ export async function initJobs(connectionString: string): Promise<void> {
   getLogger().info("pg-boss started");
 
   // pg-boss v10 requires explicit queue creation before work()/send()
-  await boss.createQueue(EXAMPLE_JOB);
-  await boss.createQueue(WELCOME_NOTIFICATION);
-  await boss.createQueue(GENERATE_SUMMARY);
-  await boss.createQueue(GENERATE_EMBEDDING);
+  // Use ifNotExists to handle idempotent restarts when queues already exist
+  const queues = [EXAMPLE_JOB, WELCOME_NOTIFICATION, GENERATE_SUMMARY, GENERATE_EMBEDDING];
+  for (const queue of queues) {
+    try {
+      await boss.createQueue(queue);
+    } catch (err: unknown) {
+      // 42P07 = "relation already exists" — safe to ignore on redeploy
+      if (err instanceof Error && "code" in err && (err as { code: string }).code === "42P07") {
+        getLogger().info(`Queue "${queue}" already exists, skipping`);
+      } else {
+        throw err;
+      }
+    }
+  }
 
   await registerExampleHandler(boss);
   await registerWelcomeNotificationHandler(boss);
