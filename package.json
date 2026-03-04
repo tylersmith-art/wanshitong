@@ -1,0 +1,29 @@
+{
+  "name": "trpc-template",
+  "private": true,
+  "scripts": {
+    "dev": "turbo dev",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down",
+    "docker:reset": "docker compose down -v && rm -rf ./data/postgres && docker compose up -d",
+    "docker:init": "docker compose up -d && sleep 2 && pnpm db:generate && pnpm db:migrate",
+    "build": "turbo build",
+    "db:generate": "turbo db:generate --filter=@template/api",
+    "db:migrate": "turbo db:migrate --filter=@template/api",
+    "db:studio": "pnpm --filter @template/api exec drizzle-kit studio",
+    "mobile:dev": "pnpm --filter @template/mobile dev",
+    "mobile:ios": "pnpm --filter @template/mobile ios",
+    "mobile:prebuild": "pnpm --filter @template/mobile prebuild",
+    "mobile:build": "pnpm --filter @template/mobile build:ios",
+    "mobile:build:dev": "pnpm --filter @template/mobile build:dev",
+    "test": "turbo test",
+    "typecheck": "turbo typecheck",
+    "db:seed": "turbo db:seed --filter=@template/api",
+    "template:init": "./scripts/init.sh",
+    "template:update": "git fetch template && git merge template/main"
+  },
+  "devDependencies": {
+    "turbo": "^2.3.0"
+  },
+  "packageManager": "pnpm@9.15.0"
+}

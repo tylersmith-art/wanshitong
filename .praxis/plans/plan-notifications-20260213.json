@@ -1,0 +1,252 @@
+{
+  "analysis": "Complete push notification system for the trpc-template. Adds mobile push (Expo), in-app toasts (web + mobile via existing real-time sync), paginated notification history views, and a single sendNotification() function callable from anywhere in the API. Follows all existing template patterns: Zod schemas as source of truth, adapter pattern for external services, pg-boss for background jobs, PgPubSub for real-time sync, factory functions over classes, configuration via injection. The feature is structured as 8 epics progressing from data layer through API, hooks, UI, and finally documentation. Epics 1 and 2 are independent foundations that feed into Epic 3 (core service), which feeds into Epic 4 (router/jobs), then Epic 5 (hooks), then Epics 6+7 (web/mobile UI) in parallel, and finally Epic 8 (docs/init.sh). After running init.sh, an app can send a push notification with no additional setup (console adapter by default, Expo adapter when credentials are provided via optional init.sh flags).",
+  "epics": [
+    {
+      "id": "epic-shared-schemas-data-layer",
+      "title": "Shared Schemas & Data Layer",
+      "description": "Foundation layer: Zod schemas (source of truth for types), Drizzle database tables, and migrations. Everything else depends on this epic. Defines the notification entity, push token entity, and the pushOptOut column on users.",
+      "priority": "high",
+      "dependsOn": [],
+      "beads": [
+        {
+          "id": "bead-notification-zod-schemas",
+          "title": "Notification and push token Zod schemas",
+          "description": "Create Zod schemas in packages/shared/src/schemas/notification.ts: CreateNotificationSchema (title, body, actionUrl nullable), NotificationSchema (extends with id, userId, read, createdAt), PushTokenSchema (id, userId, token, createdAt). Export types via z.infer. Add pagination schemas: NotificationListInputSchema (cursor uuid optional, limit number 1-100 default 20). Re-export all schemas and types from packages/shared/src/schemas/index.ts barrel. Rebuild shared so downstream packages see new types.\n\nReference: .praxis/features/adding-entities.md (Step 1: Define the Zod Schemas), .praxis/features/coding-guidelines.md",
+          "priority": "high",
+          "dependsOn": []
+        },
+        {
+          "id": "bead-database-tables-migration",
+          "title": "Database tables and migration",
+          "description": "Add to packages/api/src/db/schema.ts: (1) notifications table with id (uuid PK), userId (uuid FK users.id onDelete cascade), title (varchar 255), body (varchar 2000), actionUrl (varchar 500 nullable), read (boolean default false), createdAt (timestamptz default now). (2) push_tokens table with id (uuid PK), userId (uuid FK users.id onDelete cascade), token (varchar 255 unique), createdAt (timestamptz default now). (3) Add pushOptOut (boolean default false) column to existing users table. Generate migration with pnpm db:generate. Document the migration in the PR.\n\nReference: .praxis/features/adding-entities.md (Step 2: Define the Database Table), .praxis/features/adding-sub-entities.md (Step 2: Foreign Key), .praxis/features/database.md",
+          "priority": "high",
+          "dependsOn": ["bead-notification-zod-schemas"]
+        },
+        {
+          "id": "bead-schema-tests",
+          "title": "Schema validation tests",
+          "description": "Create packages/shared/src/schemas/notification.test.ts with tests for: CreateNotificationSchema (valid input, rejects empty title, rejects empty body, accepts null actionUrl, rejects actionUrl over 500 chars), NotificationSchema (valid notification, rejects invalid uuid), PushTokenSchema (valid token, rejects empty token), NotificationListInputSchema (defaults, valid cursor, rejects limit over 100, rejects limit under 1). Follow existing test patterns from packages/shared/src/schemas/user.test.ts.\n\nReference: .praxis/features/adding-entities.md (Step 7: Write Tests), .praxis/features/testing.md",
+          "priority": "high",
+          "dependsOn": ["bead-notification-zod-schemas"]
+        }
+      ]
+    },
+    {
+      "id": "epic-push-adapter",
+      "title": "Push Notification External Service Adapter",
+      "description": "Expo Push API integration following the adapter pattern from adding-external-services.md. Console adapter for dev/test (logs to Pino), Expo adapter for production. Factory selects implementation based on PUSH_PROVIDER env var. This epic is independent of Epic 1 and can be built in parallel.",
+      "priority": "high",
+      "dependsOn": [],
+      "beads": [
+        {
+          "id": "bead-push-adapter-type-console",
+          "title": "Push adapter type and console implementation",
+          "description": "Create packages/api/src/services/push/types.ts with: SendPushParams (token, title, body, data optional), SendPushResult (success, error optional), PushAdapter type (send(params): Promise<SendPushResult>, sendBatch(params[]): Promise<SendPushResult[]>). Create packages/api/src/services/push/console.ts with createConsolePushAdapter() that logs via getLogger().info and returns success. Factory function pattern, not class.\n\nReference: .praxis/features/adding-external-services.md (Steps 1-2), .praxis/features/coding-guidelines.md",
+          "priority": "high",
+          "dependsOn": []
+        },
+        {
+          "id": "bead-expo-push-implementation",
+          "title": "Expo Push API implementation",
+          "description": "Create packages/api/src/services/push/expo.ts with createExpoPushAdapter(config: { accessToken: string }). Implementation: POST to https://exp.host/--/api/v2/push/send with bearer token auth. Batch sends (Expo accepts up to 100 per request). Handle response tickets — log errors, detect DeviceNotRegistered status and return it in the result so callers can clean up stale tokens. Use native fetch, no SDK dependency. Return result objects (not thrown errors) per adding-external-services.md pattern.\n\nReference: .praxis/features/adding-external-services.md (Step 3), .praxis/features/coding-guidelines.md",
+          "priority": "high",
+          "dependsOn": ["bead-push-adapter-type-console"]
+        },
+        {
+          "id": "bead-push-factory-env",
+          "title": "Push adapter factory and env vars",
+          "description": "Create packages/api/src/services/push/index.ts with getPushAdapter(), setPushAdapter(), resetPushAdapter(). Factory reads PUSH_PROVIDER env var: 'expo' creates Expo adapter (requires EXPO_ACCESS_TOKEN), default creates console adapter. Re-export types. Add to packages/api/src/lib/env.ts: PUSH_PROVIDER (z.string().optional()), EXPO_ACCESS_TOKEN (z.string().optional()). Validate EXPO_ACCESS_TOKEN inside factory when provider is expo, not at startup.\n\nReference: .praxis/features/adding-external-services.md (Steps 4-5), .praxis/features/env-validation.md",
+          "priority": "high",
+          "dependsOn": ["bead-expo-push-implementation"]
+        },
+        {
+          "id": "bead-push-adapter-tests",
+          "title": "Push adapter tests",
+          "description": "Create packages/api/src/services/push/console.test.ts (logs and returns success), packages/api/src/services/push/expo.test.ts (mock fetch, verify correct Expo API payload, handle DeviceNotRegistered, handle API error, batch splitting), packages/api/src/services/push/index.test.ts (factory returns console by default, returns expo when PUSH_PROVIDER=expo, throws when expo without EXPO_ACCESS_TOKEN). Use vi.stubGlobal('fetch') for Expo tests.\n\nReference: .praxis/features/adding-external-services.md (How to Test), .praxis/features/testing.md",
+          "priority": "medium",
+          "dependsOn": ["bead-push-factory-env"]
+        }
+      ]
+    },
+    {
+      "id": "epic-notification-service",
+      "title": "Notification Service (Core Logic)",
+      "description": "The sendNotification() and broadcastNotification() functions that any server-side code can call. This is the single entry point that handles DB insert, real-time sync event publishing, push token lookup, opt-out checking, and push delivery. Takes db and pubsub as explicit parameters (injection, not globals) for testability.",
+      "priority": "high",
+      "dependsOn": ["epic-shared-schemas-data-layer", "epic-push-adapter"],
+      "beads": [
+        {
+          "id": "bead-notification-service-module",
+          "title": "Notification service module",
+          "description": "Create packages/api/src/services/notifications/index.ts with two exported functions:\n\n1. sendNotification(db, pubsub, target: { userId: string } | { userIds: string[] }, payload: { title, body, actionUrl? }) — inserts notification row(s), publishes SyncEvent per user on syncChannel('notification'), looks up push_tokens for recipient(s), checks pushOptOut on each user, calls push adapter sendBatch for opted-in users with valid tokens. Handles DeviceNotRegistered by deleting stale tokens.\n\n2. broadcastNotification(db, pubsub, payload: { title, body, actionUrl? }) — queries all user IDs, delegates to sendNotification with the full list. For large user bases, processes in batches.\n\nBoth functions return { notificationIds: string[], pushResults: { sent: number, skipped: number, failed: number } }.\n\nReference: .praxis/features/adding-external-services.md (Step 6: Use the Adapter), .praxis/features/background-jobs.md, .praxis/features/realtime-sync.md, .praxis/features/coding-guidelines.md",
+          "priority": "high",
+          "dependsOn": []
+        },
+        {
+          "id": "bead-notification-service-tests",
+          "title": "Notification service unit tests",
+          "description": "Create packages/api/src/services/notifications/index.test.ts. Test cases: (1) single user — inserts notification, publishes sync event, sends push. (2) multiple users — inserts for each, publishes per user, batch sends push. (3) broadcast — queries all users, delegates correctly. (4) user with pushOptOut=true — notification inserted and sync published, but push skipped. (5) user with no push tokens — notification inserted and sync published, push skipped gracefully. (6) DeviceNotRegistered — stale token deleted from push_tokens table. (7) push adapter failure — notification still persisted (push failure doesn't roll back DB). Mock db, pubsub, and push adapter via setPushAdapter().\n\nReference: .praxis/features/testing.md, .praxis/features/adding-external-services.md (How to Test)",
+          "priority": "high",
+          "dependsOn": ["bead-notification-service-module"]
+        }
+      ]
+    },
+    {
+      "id": "epic-trpc-router-jobs",
+      "title": "tRPC Router & Background Jobs",
+      "description": "Client-facing notification API endpoints and the welcome notification background job. The router provides paginated list, read/unread management, real-time subscription, push token registration, and push opt-out toggle. The job demonstrates the sendNotification() integration with pg-boss.",
+      "priority": "high",
+      "dependsOn": ["epic-notification-service"],
+      "beads": [
+        {
+          "id": "bead-notification-router",
+          "title": "Notification tRPC router",
+          "description": "Create packages/api/src/routers/notification.ts with:\n\n- list: protectedProcedure, input NotificationListInputSchema (cursor, limit), returns paginated notifications for ctx.user filtered by userId looked up from ctx.user.email, ordered by createdAt desc, with nextCursor.\n- unreadCount: protectedProcedure, returns { count: number } for current user.\n- markRead: protectedProcedure, input { id: uuid }, verifies notification belongs to current user, sets read=true, publishes sync event.\n- markUnread: protectedProcedure, input { id: uuid }, verifies ownership, sets read=false, publishes sync event.\n- markAllRead: protectedProcedure, updates all unread notifications for current user, publishes sync event.\n- onSync: publicProcedure subscription on syncChannel('notification'), yields SyncEvent<Notification>.\n- registerPushToken: protectedProcedure, input { token: string }, upserts into push_tokens for current user (ON CONFLICT token DO UPDATE userId).\n- updatePushOptOut: protectedProcedure, input { optOut: boolean }, updates pushOptOut on users table for current user, publishes user sync event.\n\nWire notificationRouter into appRouter in packages/api/src/routers/index.ts.\n\nReference: .praxis/features/adding-entities.md (Step 3), .praxis/features/adding-sub-entities.md (Step 3), .praxis/features/trpc.md, .praxis/features/realtime-sync.md, .praxis/features/roles-permissions.md",
+          "priority": "high",
+          "dependsOn": []
+        },
+        {
+          "id": "bead-welcome-notification-job",
+          "title": "Welcome notification background job",
+          "description": "Create packages/api/src/jobs/handlers/sendWelcomeNotification.ts with WELCOME_NOTIFICATION job name and registerWelcomeNotificationHandler(boss). Handler calls sendNotification() with title 'Thanks for registering for {appName}' (appName from payload or env) and a welcome body. Register in packages/api/src/jobs/index.ts (createQueue + register handler). Enqueue from user.create mutation in packages/api/src/routers/user.ts — after inserting user, call enqueueJob(WELCOME_NOTIFICATION, { userId: user.id }). The job needs db and pubsub references — pass connectionString to handler for db, create pubsub instance or pass via closure.\n\nReference: .praxis/features/background-jobs.md, .praxis/features/adding-external-services.md (Step 6: From a background job)",
+          "priority": "high",
+          "dependsOn": ["bead-notification-router"]
+        },
+        {
+          "id": "bead-router-job-tests",
+          "title": "Router and job handler tests",
+          "description": "Create packages/api/src/routers/notification.test.ts: test list returns paginated results for current user only, test unreadCount, test markRead/markUnread verify ownership (FORBIDDEN for other user's notification), test markAllRead, test registerPushToken upserts, test updatePushOptOut, test auth required on all endpoints. Create packages/api/src/jobs/handlers/sendWelcomeNotification.test.ts: test handler calls sendNotification with correct payload, test registration in initJobs. Follow existing patterns from packages/api/src/routers/user.test.ts.\n\nReference: .praxis/features/adding-entities.md (Step 7), .praxis/features/testing.md, .praxis/features/background-jobs.md (How to Test)",
+          "priority": "high",
+          "dependsOn": ["bead-notification-router", "bead-welcome-notification-job"]
+        }
+      ]
+    },
+    {
+      "id": "epic-client-hooks",
+      "title": "Client Hooks",
+      "description": "Shared React hooks consumed by both web and mobile apps. useNotifications provides paginated data access with real-time sync, useNotificationToast provides a framework-agnostic callback for triggering toast UI on new notifications.",
+      "priority": "high",
+      "dependsOn": ["epic-trpc-router-jobs"],
+      "beads": [
+        {
+          "id": "bead-use-notifications-hook",
+          "title": "useNotifications hook",
+          "description": "Create packages/hooks/src/hooks/useNotifications.ts. The hook provides: notifications (array), isLoading, error, hasNextPage, fetchNextPage (cursor-based pagination via useInfiniteQuery or manual cursor tracking), unreadCount (from separate unreadCount query), markRead(id), markUnread(id), markAllRead(). Subscribe to notification.onSync via useSyncSubscription — on 'created' prepend to list and increment unreadCount, on 'updated' replace in list and recalculate unreadCount. Define SerializedNotification type (dates as strings). Re-export from packages/hooks/src/index.ts barrel.\n\nReference: .praxis/features/adding-entities.md (Step 4), .praxis/features/realtime-sync.md, .praxis/features/adding-sub-entities.md (Step 6)",
+          "priority": "high",
+          "dependsOn": []
+        },
+        {
+          "id": "bead-use-notification-toast-hook",
+          "title": "useNotificationToast hook",
+          "description": "Create packages/hooks/src/hooks/useNotificationToast.ts. Accepts a callback: onNotification(notification: { title, body, actionUrl? }). Subscribes to notification.onSync — when a 'created' event arrives, calls the callback with the notification data. This is framework-agnostic: web passes a callback that renders a DOM toast, mobile passes a callback that shows an Alert or custom overlay. Re-export from packages/hooks/src/index.ts barrel.\n\nReference: .praxis/features/realtime-sync.md",
+          "priority": "medium",
+          "dependsOn": []
+        }
+      ]
+    },
+    {
+      "id": "epic-web-ui",
+      "title": "Web UI",
+      "description": "Toast notifications, notification history view in profile, and unread count badge in the navbar. All built with existing TailwindCSS v4 patterns and React Router v7.",
+      "priority": "high",
+      "dependsOn": ["epic-client-hooks"],
+      "beads": [
+        {
+          "id": "bead-web-toast-component",
+          "title": "Toast notification component",
+          "description": "Create packages/web/src/components/NotificationToast.tsx. Renders a fixed-position container (top-right). Uses useNotificationToast hook — callback adds notification to a local state queue. Each toast shows title + body, auto-dismisses after 5 seconds, click navigates to actionUrl (via React Router useNavigate) if present. Supports stacking (up to 3 visible, older ones dismissed). Styled with TailwindCSS: bg-white, shadow, rounded, slide-in animation via CSS transition. Dismiss on click or X button.\n\nReference: .praxis/features/web-app.md",
+          "priority": "high",
+          "dependsOn": []
+        },
+        {
+          "id": "bead-web-notification-view",
+          "title": "Notification view in profile",
+          "description": "Add a Notifications section to packages/web/src/views/Profile.tsx (or create packages/web/src/components/NotificationList.tsx as an extracted component if Profile.tsx would exceed 500 lines). Uses useNotifications hook. Renders paginated list: each notification shows title, body, timestamp (relative, e.g. '2 hours ago'), read/unread styling (unread has left border accent + bold title), click navigates to actionUrl. 'Mark as read'/'Mark as unread' button per item. 'Mark all as read' button at top. 'Load more' button at bottom when hasNextPage. Empty state: 'No notifications yet.'\n\nReference: .praxis/features/adding-entities.md (Step 5), .praxis/features/web-app.md",
+          "priority": "high",
+          "dependsOn": []
+        },
+        {
+          "id": "bead-web-unread-badge",
+          "title": "Unread count badge in navbar",
+          "description": "Modify packages/web/src/components/NavBar.tsx: when user is authenticated, query notification.unreadCount (via trpc.notification.unreadCount.useQuery() or via useNotifications().unreadCount). Display a small red dot or count badge next to the Profile nav link when unreadCount > 0. Badge should update in real-time via the sync subscription (already handled by useNotifications hook's cache updates).\n\nReference: .praxis/features/web-app.md",
+          "priority": "medium",
+          "dependsOn": []
+        },
+        {
+          "id": "bead-web-wire-toast",
+          "title": "Wire toast into app layout",
+          "description": "Mount the NotificationToast component in packages/web/src/App.tsx so toasts appear on all pages regardless of current route. Place it outside the Routes component but inside TRPCProvider (needs tRPC context). Only render when user is authenticated (toasts require a subscription which requires auth context).\n\nReference: .praxis/features/web-app.md",
+          "priority": "medium",
+          "dependsOn": ["bead-web-toast-component"]
+        }
+      ]
+    },
+    {
+      "id": "epic-mobile-ui",
+      "title": "Mobile UI",
+      "description": "Push token registration, notification history screen, push opt-out toggle, and enhanced notification tap handling. Built with React Native + Expo patterns.",
+      "priority": "high",
+      "dependsOn": ["epic-client-hooks"],
+      "beads": [
+        {
+          "id": "bead-mobile-push-registration",
+          "title": "Push token registration on app launch",
+          "description": "In packages/mobile/app/_layout.tsx (inside AppInner where TRPCProvider is available), add useEffect that: (1) calls registerForPushNotifications() from existing lib/notifications.ts, (2) if token returned, calls trpc.notification.registerPushToken.mutate({ token }). Only run when authenticated. Handle errors gracefully (log, don't crash). Token registration should happen once per app launch, not on every re-render — use a ref or state flag.\n\nReference: .praxis/features/mobile-app.md (Use push notifications section)",
+          "priority": "high",
+          "dependsOn": []
+        },
+        {
+          "id": "bead-mobile-notification-screen",
+          "title": "Notification screen in profile",
+          "description": "Create packages/mobile/app/(tabs)/notifications.tsx (new tab) or a screen navigable from the profile tab. Uses useNotifications hook. FlatList with onEndReached for pagination (calls fetchNextPage). Each item: title (bold if unread), body, relative timestamp, left accent color for unread. Swipe or long-press to mark read/unread. 'Mark all as read' button in header. Pull-to-refresh triggers list invalidation. Add tab to packages/mobile/app/(tabs)/_layout.tsx with Ionicons 'notifications' icon and badge count.\n\nReference: .praxis/features/mobile-app.md (Add a new tab)",
+          "priority": "high",
+          "dependsOn": []
+        },
+        {
+          "id": "bead-mobile-push-opt-out",
+          "title": "Push opt-out toggle in profile",
+          "description": "Add a Switch component to packages/mobile/app/(tabs)/profile.tsx in the authenticated view. Label: 'Push Notifications' with on/off state from the user's pushOptOut value. On toggle, call trpc.notification.updatePushOptOut.mutate({ optOut: !current }). Show loading state while mutation is pending.\n\nReference: .praxis/features/mobile-app.md",
+          "priority": "medium",
+          "dependsOn": []
+        },
+        {
+          "id": "bead-mobile-notification-listeners",
+          "title": "Enhanced notification tap and foreground handling",
+          "description": "Update packages/mobile/src/lib/notifications.ts: (1) In addNotificationListeners, the response listener (notification tapped) should extract actionUrl from notification.request.content.data and call a navigation callback (passed as parameter or via a global event). (2) For foreground real-time sync events, use useNotificationToast hook in _layout.tsx with a callback that shows a React Native Alert or custom toast overlay. The existing shouldShowBanner: true in setNotificationHandler already handles native push when app is foregrounded.\n\nReference: .praxis/features/mobile-app.md, .praxis/features/realtime-sync.md",
+          "priority": "medium",
+          "dependsOn": ["bead-mobile-push-registration"]
+        }
+      ]
+    },
+    {
+      "id": "epic-init-docs",
+      "title": "init.sh & Documentation",
+      "description": "Template completeness: init.sh optional push credential flags for fully autonomous setup, comprehensive .praxis/features/ documentation for developers and AI agents, and README update for discoverability.",
+      "priority": "high",
+      "dependsOn": ["epic-web-ui", "epic-mobile-ui"],
+      "beads": [
+        {
+          "id": "bead-init-sh-push-flags",
+          "title": "init.sh push credential flags",
+          "description": "Add optional flags to scripts/init.sh: --expo-token (EXPO_ACCESS_TOKEN), --apns-key-path (path to .p8 file), --apns-key-id, --apns-team-id, --google-services-path (path to google-services.json). When --expo-token is provided: set PUSH_PROVIDER=expo and EXPO_ACCESS_TOKEN in .env files, run 'npx eas project:init --non-interactive' if eas-cli is available. When --apns-key-path is provided: run 'npx eas credentials --platform ios --non-interactive' with the key file. When --google-services-path is provided: copy file to packages/mobile/google-services.json. When no push flags: skip all push setup gracefully, PUSH_PROVIDER defaults to console. All new flags are optional — existing init.sh invocations continue to work unchanged. No interactive prompts.\n\nReference: .praxis/features/project-setup.md",
+          "priority": "high",
+          "dependsOn": []
+        },
+        {
+          "id": "bead-praxis-notifications-doc",
+          "title": ".praxis/features/notifications.md documentation",
+          "description": "Create packages root .praxis/features/notifications.md following the catalog format (description, 'use when', implementation walkthrough). Sections: (1) Overview — what the notification system provides. (2) How It Works — architecture diagram (sendNotification -> DB + SyncEvent + Push). (3) Sending Notifications — from procedures, from jobs, single/multi/broadcast with code examples. (4) Adding New Notification Types — pattern for creating domain-specific notifications (e.g., 'order shipped'). (5) Push Token Registration — mobile client-side flow. (6) Push Opt-Out — how it works, what it affects. (7) Production Push Prerequisites — step-by-step for Apple (APNs key), Google (Firebase/FCM), Expo (access token) with links to portals. (8) init.sh Flags — all optional push flags documented. (9) How to Test — mock push adapter, test sendNotification, test router with createCaller. (10) How to Debug — common issues (no push in simulator, stale tokens, console adapter in prod, sync events not arriving). (11) Related — links to adding-entities, adding-external-services, background-jobs, realtime-sync. Add entry to .praxis/features/overview.md catalog.\n\nReference: All .praxis/features/*.md files for format consistency",
+          "priority": "high",
+          "dependsOn": []
+        },
+        {
+          "id": "bead-readme-update",
+          "title": "README push notifications section",
+          "description": "Add a 'Push Notifications' section to the project README.md. Content: (1) What's included out of the box (console adapter, real-time toasts, notification views, sendNotification API). (2) Production push setup prerequisites (Apple Developer, Firebase, Expo — brief with link to .praxis/features/notifications.md for details). (3) init.sh flags for automated push credential setup. (4) Quick-start example: 'Send your first notification' code snippet showing sendNotification() call. Keep concise — detailed docs live in the .praxis feature guide.\n\nReference: .praxis/features/notifications.md",
+          "priority": "medium",
+          "dependsOn": ["bead-praxis-notifications-doc"]
+        }
+      ]
+    }
+  ]
+}

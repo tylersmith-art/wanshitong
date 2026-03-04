@@ -1,0 +1,74 @@
+{
+  "expo": {
+    "name": "TEMPLATE_APP_NAME",
+    "slug": "TEMPLATE_SLUG",
+    "scheme": "TEMPLATE_SCHEME",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/TEMPLATE_EAS_PROJECT_ID",
+      "requestHeaders": {
+        "expo-channel-name": "production"
+      }
+    },
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "art.tylermakes.TEMPLATE_BUNDLE",
+      "infoPlist": {
+        "NSHealthShareUsageDescription": "This app reads your health data to track your activity.",
+        "NSHealthUpdateUsageDescription": "This app writes workout data to HealthKit.",
+        "NSCalendarsUsageDescription": "This app syncs events to your calendar.",
+        "NSCalendarsFullAccessUsageDescription": "This app needs full calendar access to create and manage events."
+      },
+      "entitlements": {
+        "com.apple.developer.healthkit": true,
+        "com.apple.developer.healthkit.background-delivery": true
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      }
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "expo-notifications",
+        {
+          "sounds": []
+        }
+      ],
+      "expo-calendar",
+      [
+        "@kingstinct/react-native-healthkit",
+        {
+          "NSHealthShareUsageDescription": "This app reads your health data.",
+          "NSHealthUpdateUsageDescription": "This app writes data to HealthKit.",
+          "background": true
+        }
+      ]
+    ],
+    "extra": {
+      "apiUrl": "https://TEMPLATE_DOMAIN/api/trpc",
+      "auth0Domain": "TEMPLATE_AUTH0_DOMAIN",
+      "auth0ClientId": "TEMPLATE_AUTH0_CLIENT_ID",
+      "auth0Audience": "TEMPLATE_AUTH0_AUDIENCE",
+      "eas": {
+        "projectId": "TEMPLATE_EAS_PROJECT_ID"
+      }
+    }
+  }
+}

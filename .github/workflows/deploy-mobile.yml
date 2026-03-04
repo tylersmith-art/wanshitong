@@ -1,0 +1,62 @@
+name: Deploy Mobile
+
+on:
+  workflow_dispatch:
+    inputs:
+      full_rebuild:
+        description: "Force full native rebuild + install to device"
+        required: false
+        default: "false"
+        type: boolean
+  push:
+    branches: [main]
+    paths:
+      - "packages/mobile/**"
+      - "packages/shared/**"
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set environment variables
+        run: |
+          echo "REPO_NAME=$(basename $GITHUB_REPOSITORY)" >> $GITHUB_ENV
+          echo "GIT_SHA=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+
+      - name: Load environment
+        run: |
+          ENV_FILE="/Users/tylersmith/envs/${{ env.REPO_NAME }}.env"
+          if [ ! -f "$ENV_FILE" ]; then
+            echo "ERROR: $ENV_FILE not found. Run init.sh first."
+            exit 1
+          fi
+          # init.sh saves it as EXPO_ACCESS_TOKEN; eas-cli reads EXPO_TOKEN
+          TOKEN=$(grep "^EXPO_ACCESS_TOKEN=" "$ENV_FILE" | cut -d= -f2- || true)
+          if [ -n "$TOKEN" ]; then
+            echo "EXPO_TOKEN=$TOKEN" >> $GITHUB_ENV
+          fi
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build workspace packages
+        run: pnpm --filter ./packages/shared --filter ./packages/hooks build
+
+      # ── OTA update (JS-only, fast) ──────────────────────────────────
+      - name: Link EAS project
+        working-directory: packages/mobile
+        run: npx eas-cli init --non-interactive --force
+
+      - name: Push OTA update via EAS
+        working-directory: packages/mobile
+        run: |
+          npx eas-cli update \
+            --branch production \
+            --message "deploy ${{ env.GIT_SHA }}" \
+            --non-interactive
+
+      # ── Native rebuild + install to device ────────────────────────────
+      - name: Native rebuild + deploy to device
+        run: ./scripts/build-device.sh --release --clean

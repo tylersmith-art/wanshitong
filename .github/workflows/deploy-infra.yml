@@ -1,0 +1,35 @@
+name: Deploy Infrastructure
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".k8s/**"
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set environment variables
+        run: |
+          echo "REPO_NAME=$(basename $GITHUB_REPOSITORY)" >> $GITHUB_ENV
+
+      - name: Generate Postgres secrets
+        run: |
+          ENV_FILE="/Users/tylersmith/envs/${{ env.REPO_NAME }}-postgres.env"
+          if [ ! -f "$ENV_FILE" ]; then
+            echo "ERROR: $ENV_FILE not found. Run init.sh first."
+            exit 1
+          fi
+          kubectl delete secret ${{ env.REPO_NAME }}-postgres-secret --ignore-not-found
+          kubectl create secret generic ${{ env.REPO_NAME }}-postgres-secret \
+            --from-env-file="$ENV_FILE"
+
+      - name: Deploy PostgreSQL
+        run: |
+          sed "s|<REPO_NAME>|${{ env.REPO_NAME }}|g" \
+            .k8s/postgres-deployment.yml | kubectl apply -f -
+          kubectl rollout status deployment/${{ env.REPO_NAME }}-postgres --timeout=120s
