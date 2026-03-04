@@ -7,7 +7,7 @@ const program = new Command();
 program
   .name("wst")
   .description("Wan Shi Tong CLI - Architecture knowledge search")
-  .version("0.0.2");
+  .version("0.0.3");
 
 program.addCommand(initCommand);
 program.addCommand(arcCommand);

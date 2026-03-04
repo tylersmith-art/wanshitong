@@ -7,7 +7,7 @@ Architecture knowledge search for your projects.
 Commands:
   wst init <projectName>     Configure API key and connect a project
     --key <apiKey>           API key (skips interactive prompt)
-    --url <apiUrl>           Server URL (default: http://localhost:3000/api/trpc)
+    --url <apiUrl>           Server URL (default: https://wanshitong.tylermakes.art/api/trpc)
 
   wst arc '<query>'          Search architecture specs
     --limit <n>              Max results (default: 5)

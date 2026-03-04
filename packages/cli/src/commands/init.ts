@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { writeConfig } from "../lib/config.js";
 import { searchSpecs } from "../lib/api.js";
 
-const DEFAULT_API_URL = "http://localhost:3000/api/trpc";
+const DEFAULT_API_URL = "https://wanshitong.tylermakes.art/api/trpc";
 
 const WST_MARKER = "Wan Shi Tong - Architecture Knowledge";
 
