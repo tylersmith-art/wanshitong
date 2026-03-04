@@ -3,7 +3,7 @@ import { sql } from "drizzle-orm";
 import type { SearchAdapter, SearchParams, SearchResult } from "./types.js";
 
 export function createPgVectorSearchAdapter(config: {
-  db: { execute: (query: unknown) => Promise<unknown> };
+  db: { execute: (query: any) => Promise<unknown> };
 }): SearchAdapter {
   return {
     async search(params: SearchParams): Promise<SearchResult> {
