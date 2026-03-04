@@ -26,30 +26,37 @@ export function Home() {
           Get Started
         </button>
       )}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 text-left">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 text-left">
         <div className="p-6 border border-gray-200 rounded-lg bg-white">
-          <h3 className="font-semibold mb-2">End-to-End Type Safety</h3>
+          <div className="text-4xl mb-3">🔍</div>
+          <h3 className="font-semibold mb-2">Semantic Search</h3>
           <p className="text-gray-500 text-sm leading-relaxed">
-            Shared Zod schemas and tRPC give you full autocomplete from database
-            to UI.
+            Search your architecture docs by meaning, not just keywords. Powered
+            by vector embeddings.
           </p>
         </div>
         <div className="p-6 border border-gray-200 rounded-lg bg-white">
-          <h3 className="font-semibold mb-2">Auth0 Authentication</h3>
+          <div className="text-4xl mb-3">⌨️</div>
+          <h3 className="font-semibold mb-2">CLI Tool</h3>
           <p className="text-gray-500 text-sm leading-relaxed">
-            {isAuthenticated
-              ? "You're logged in."
-              : "Log in to access protected routes and API mutations."}
+            wst arc searches your project's specs right from the terminal.
+            Install via Homebrew.
           </p>
         </div>
         <div className="p-6 border border-gray-200 rounded-lg bg-white">
-          <h3 className="font-semibold mb-2">Demo</h3>
+          <div className="text-4xl mb-3">🤖</div>
+          <h3 className="font-semibold mb-2">AI Agent Integration</h3>
           <p className="text-gray-500 text-sm leading-relaxed">
-            Visit the{" "}
-            <Link to="/users" className="text-indigo-600">
-              Users page
-            </Link>{" "}
-            to see tRPC in action with full CRUD operations.
+            wst init injects architecture guidance into CLAUDE.md so AI agents
+            automatically reference your docs.
+          </p>
+        </div>
+        <div className="p-6 border border-gray-200 rounded-lg bg-white">
+          <div className="text-4xl mb-3">📁</div>
+          <h3 className="font-semibold mb-2">Project-Scoped Knowledge</h3>
+          <p className="text-gray-500 text-sm leading-relaxed">
+            Attach specs to projects. Each project gets its own curated
+            knowledge base.
           </p>
         </div>
       </div>
