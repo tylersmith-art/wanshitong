@@ -24,6 +24,8 @@ vi.mock("../jobs/index.js", () => ({
   enqueueJob: vi.fn().mockResolvedValue("job-123"),
 }));
 
+import { enqueueJob } from "../jobs/index.js";
+import { GENERATE_SUMMARY } from "../jobs/handlers/generateSummary.js";
 import { specRouter } from "./spec.js";
 
 describe("specRouter", () => {
@@ -535,5 +537,46 @@ describe("specRouter", () => {
         timestamp: expect.any(Number),
       }),
     );
+  });
+
+  // ─── Background job enqueuing ────────────────────────────────────
+
+  it("create enqueues GENERATE_SUMMARY with correct specId", async () => {
+    resultQueue.push([{ id: USER_ID, role: "user" }]);
+    returningResults.push([mockSpec]);
+
+    const caller = createCaller({ authenticated: true });
+    await caller.create({ name: "Test Spec", content: "spec content here" });
+
+    expect(enqueueJob).toHaveBeenCalledWith(GENERATE_SUMMARY, { specId: SPEC_ID });
+  });
+
+  it("update with content change enqueues GENERATE_SUMMARY and sets embeddingStatus to pending", async () => {
+    const updatedSpec = { ...mockSpec, content: "new content", embeddingStatus: "pending" };
+
+    resultQueue.push([{ id: USER_ID, role: "user" }]);
+    resultQueue.push([mockSpec]);
+    returningResults.push([updatedSpec]);
+
+    const caller = createCaller({ authenticated: true });
+    await caller.update({ id: SPEC_ID, content: "new content" });
+
+    expect(mockDb.set).toHaveBeenCalledWith(
+      expect.objectContaining({ embeddingStatus: "pending" }),
+    );
+    expect(enqueueJob).toHaveBeenCalledWith(GENERATE_SUMMARY, { specId: SPEC_ID });
+  });
+
+  it("update without content change does NOT enqueue any job", async () => {
+    const updatedSpec = { ...mockSpec, name: "Renamed Spec" };
+
+    resultQueue.push([{ id: USER_ID, role: "user" }]);
+    resultQueue.push([mockSpec]);
+    returningResults.push([updatedSpec]);
+
+    const caller = createCaller({ authenticated: true });
+    await caller.update({ id: SPEC_ID, name: "Renamed Spec" });
+
+    expect(enqueueJob).not.toHaveBeenCalled();
   });
 });

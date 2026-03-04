@@ -11,6 +11,8 @@ import {
 import { router, publicProcedure, protectedProcedure } from "../trpc.js";
 import { architectureSpecs, orgMembers } from "../db/schema.js";
 import { iterateEvents } from "../lib/iterateEvents.js";
+import { enqueueJob } from "../jobs/index.js";
+import { GENERATE_SUMMARY } from "../jobs/handlers/generateSummary.js";
 
 let eventId = 0;
 
@@ -73,6 +75,8 @@ export const specRouter = router({
         .insert(architectureSpecs)
         .values({ ...input, userId: dbUser.id })
         .returning();
+
+      await enqueueJob(GENERATE_SUMMARY, { specId: spec.id });
 
       await ctx.pubsub.publish(syncChannel("spec"), {
         action: "created",
@@ -193,14 +197,23 @@ export const specRouter = router({
       }
 
       const { id, ...updates } = input;
+      const contentChanged = updates.content !== undefined;
       const [updated] = await ctx.db
         .update(architectureSpecs)
-        .set({ ...updates, updatedAt: new Date() })
+        .set({
+          ...updates,
+          updatedAt: new Date(),
+          ...(contentChanged ? { embeddingStatus: "pending" as const } : {}),
+        })
         .where(eq(architectureSpecs.id, id))
         .returning();
 
       if (!updated) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Spec not found" });
+      }
+
+      if (contentChanged) {
+        await enqueueJob(GENERATE_SUMMARY, { specId: updated.id });
       }
 
       await ctx.pubsub.publish(syncChannel("spec"), {
