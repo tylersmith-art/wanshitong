@@ -115,7 +115,7 @@ export function Home() {
             4. Initialize your project
           </p>
           <CodeBlock
-            code="wst init my-project --key <your-api-key>"
+            code="wst init my-project --key <your-api-key> --url https://wanshitong.tylermakes.art/api/trpc"
             language="bash"
           />
           <p className="text-gray-600 mt-2">
