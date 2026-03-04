@@ -6,6 +6,8 @@ import { NotificationToast } from "./components/NotificationToast.js";
 import { Home } from "./views/Home.js";
 import { Profile } from "./views/Profile.js";
 import { Users } from "./views/Users.js";
+import { Organizations } from "./views/Organizations.js";
+import { OrgDetail } from "./views/OrgDetail.js";
 import { Admin } from "./views/Admin.js";
 import { AuthGuard } from "./components/AuthGuard.js";
 
@@ -43,6 +45,22 @@ export function App() {
             element={
               <AuthGuard>
                 <Users />
+              </AuthGuard>
+            }
+          />
+          <Route
+            path="/orgs"
+            element={
+              <AuthGuard>
+                <Organizations />
+              </AuthGuard>
+            }
+          />
+          <Route
+            path="/orgs/:id"
+            element={
+              <AuthGuard>
+                <OrgDetail />
               </AuthGuard>
             }
           />

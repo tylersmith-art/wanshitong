@@ -34,6 +34,12 @@ export function NavBar() {
                 Users
               </Link>
               <Link
+                to="/orgs"
+                className={`no-underline font-medium ${isActive("/orgs") ? "text-gray-900" : "text-gray-500"}`}
+              >
+                Orgs
+              </Link>
+              <Link
                 to="/profile"
                 className={`no-underline font-medium ${isActive("/profile") ? "text-gray-900" : "text-gray-500"}`}
               >
