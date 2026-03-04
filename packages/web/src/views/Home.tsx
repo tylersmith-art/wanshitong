@@ -99,7 +99,7 @@ export function Home() {
         <div className="mb-8">
           <p className="text-lg font-semibold mb-2">3. Install the CLI</p>
           <CodeBlock
-            code="brew tap tylersmith-art/wst && brew install wst"
+            code="brew tap tylersmith-art/wanshitong && brew install wst"
             language="bash"
           />
           <p className="text-gray-600 mt-2">
