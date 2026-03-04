@@ -7,9 +7,12 @@ import { getEmbeddingAdapter } from "../services/embedding/index.js";
 import { getSearchAdapter } from "../services/search/index.js";
 import { queryLogs, projects, orgMembers } from "../db/schema.js";
 
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 const SearchInputSchema = z.object({
   query: z.string().min(1).max(2000),
-  projectId: z.string().uuid().optional(),
+  projectId: z.string().min(1).max(200).optional(),
   limit: z.number().int().min(1).max(50).default(10),
 });
 
@@ -19,12 +22,18 @@ export const searchRouter = router({
     .query(async ({ ctx, input }) => {
       const startTime = Date.now();
 
-      // 1. If projectId provided, verify caller has access via org membership
+      // 1. If projectId provided, resolve it (UUID or name) and verify access
+      let resolvedProjectId: string | undefined;
+
       if (input.projectId) {
+        const condition = UUID_RE.test(input.projectId)
+          ? eq(projects.id, input.projectId)
+          : eq(projects.name, input.projectId);
+
         const [project] = await ctx.db
           .select()
           .from(projects)
-          .where(eq(projects.id, input.projectId))
+          .where(condition)
           .limit(1);
 
         if (!project) {
@@ -33,6 +42,8 @@ export const searchRouter = router({
             message: "Project not found",
           });
         }
+
+        resolvedProjectId = project.id;
 
         if (!ctx.dbUser) {
           throw new TRPCError({
@@ -72,10 +83,10 @@ export const searchRouter = router({
         });
       }
 
-      // 3. Search with the embedding vector
+      // 3. Search with the embedding vector (always pass the resolved UUID)
       const searchResult = await getSearchAdapter().search({
         embedding: embedResult.embedding,
-        projectId: input.projectId,
+        projectId: resolvedProjectId,
         limit: input.limit,
       });
 

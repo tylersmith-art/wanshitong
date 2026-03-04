@@ -253,6 +253,41 @@ describe("searchRouter", () => {
     ).rejects.toThrow("Not a member of this organization");
   });
 
+  it("resolves project by name when projectId is not a UUID", async () => {
+    // flexibleAuthProcedure JWT path: user lookup
+    resultQueue.push([
+      {
+        id: USER_ID,
+        sub: "user123",
+        email: "test@example.com",
+        name: "Test",
+        role: "user",
+        createdAt: new Date(),
+      },
+    ]);
+    // Project lookup by name
+    resultQueue.push([{ id: PROJECT_ID, orgId: ORG_ID, name: "my-project" }]);
+    // Org membership check
+    resultQueue.push([
+      { id: "mem-1", orgId: ORG_ID, userId: USER_ID, role: "member" },
+    ]);
+
+    const caller = createJwtCaller();
+    const result = await caller.search.search({
+      query: "database patterns",
+      projectId: "my-project",
+      limit: 5,
+    });
+
+    expect(result.results).toHaveLength(2);
+    // The resolved UUID should be passed to the search adapter, not the name
+    expect(mockSearch).toHaveBeenCalledWith({
+      embedding: [0.1, 0.2, 0.3],
+      projectId: PROJECT_ID,
+      limit: 5,
+    });
+  });
+
   it("throws NOT_FOUND when projectId does not exist", async () => {
     // flexibleAuthProcedure JWT path: user lookup
     resultQueue.push([
