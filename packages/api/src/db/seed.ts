@@ -11,6 +11,7 @@ import {
   projectSpecs,
   apiKeys,
 } from "./schema.js";
+import { orgSpecSeeds } from "./orgSpecSeeds.js";
 
 const connectionString = process.env.DATABASE_URL!;
 const client = postgres(connectionString, { max: 1 });
@@ -193,6 +194,45 @@ Connection pooling prevents database connection exhaustion under load. Use a poo
       console.log(`  Attached spec ${specId} to project`);
     } else {
       console.log(`  Skipped attachment for spec ${specId} (already exists)`);
+    }
+  }
+
+  // ── Org-Level Architecture Specs ──────────────────────────────────────
+  const orgSpecIds: string[] = [];
+
+  for (const spec of orgSpecSeeds) {
+    const existing = await db
+      .select()
+      .from(architectureSpecs)
+      .where(eq(architectureSpecs.name, spec.name))
+      .limit(1);
+
+    if (existing.length === 0) {
+      const [created] = await db
+        .insert(architectureSpecs)
+        .values({ ...spec, visibility: "org", orgId, userId: adminUserId })
+        .returning();
+      orgSpecIds.push(created.id);
+      console.log(`  Created org spec: ${created.name}`);
+    } else {
+      orgSpecIds.push(existing[0].id);
+      console.log(`  Skipped org spec: ${existing[0].name} (already exists)`);
+    }
+  }
+
+  // ── Org-Spec Project Attachments ──────────────────────────────────────
+  for (const specId of orgSpecIds) {
+    const existing = await db
+      .select()
+      .from(projectSpecs)
+      .where(eq(projectSpecs.specId, specId))
+      .limit(1);
+
+    if (existing.length === 0) {
+      await db.insert(projectSpecs).values({ projectId, specId });
+      console.log(`  Attached org spec ${specId} to project`);
+    } else {
+      console.log(`  Skipped org spec attachment ${specId} (already exists)`);
     }
   }
 
