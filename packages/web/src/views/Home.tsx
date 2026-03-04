@@ -1,5 +1,6 @@
 import { useAuth0 } from "@auth0/auth0-react";
 import { Link } from "react-router-dom";
+import { Search, Terminal, Bot, FolderOpen } from "lucide-react";
 import { CodeBlock } from "../components/CodeBlock.js";
 
 export function Home() {
@@ -29,7 +30,7 @@ export function Home() {
       )}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 text-left">
         <div className="p-6 border border-gray-200 rounded-lg bg-white">
-          <div className="text-4xl mb-3">🔍</div>
+          <Search className="w-8 h-8 text-indigo-600 mb-3" />
           <h3 className="font-semibold mb-2">Semantic Search</h3>
           <p className="text-gray-500 text-sm leading-relaxed">
             Search your architecture docs by meaning, not just keywords. Powered
@@ -37,7 +38,7 @@ export function Home() {
           </p>
         </div>
         <div className="p-6 border border-gray-200 rounded-lg bg-white">
-          <div className="text-4xl mb-3">⌨️</div>
+          <Terminal className="w-8 h-8 text-indigo-600 mb-3" />
           <h3 className="font-semibold mb-2">CLI Tool</h3>
           <p className="text-gray-500 text-sm leading-relaxed">
             wst arc searches your project's specs right from the terminal.
@@ -45,7 +46,7 @@ export function Home() {
           </p>
         </div>
         <div className="p-6 border border-gray-200 rounded-lg bg-white">
-          <div className="text-4xl mb-3">🤖</div>
+          <Bot className="w-8 h-8 text-indigo-600 mb-3" />
           <h3 className="font-semibold mb-2">AI Agent Integration</h3>
           <p className="text-gray-500 text-sm leading-relaxed">
             wst init injects architecture guidance into CLAUDE.md so AI agents
@@ -53,7 +54,7 @@ export function Home() {
           </p>
         </div>
         <div className="p-6 border border-gray-200 rounded-lg bg-white">
-          <div className="text-4xl mb-3">📁</div>
+          <FolderOpen className="w-8 h-8 text-indigo-600 mb-3" />
           <h3 className="font-semibold mb-2">Project-Scoped Knowledge</h3>
           <p className="text-gray-500 text-sm leading-relaxed">
             Attach specs to projects. Each project gets its own curated
