@@ -1,5 +1,6 @@
 export type EmbedParams = {
   text: string;
+  inputType?: "query" | "document";
 };
 
 export type EmbedResult = {

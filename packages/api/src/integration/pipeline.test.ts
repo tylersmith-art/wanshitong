@@ -372,7 +372,7 @@ describe("Full Pipeline Integration", () => {
     });
 
     // Verify embedding adapter was called with the search query
-    expect(mockEmbed).toHaveBeenCalledWith({ text: "REST API design patterns" });
+    expect(mockEmbed).toHaveBeenCalledWith({ text: "REST API design patterns", inputType: "query" });
 
     // Verify search adapter was called with the embedding
     expect(mockSearch).toHaveBeenCalledWith({
