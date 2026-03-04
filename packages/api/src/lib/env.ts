@@ -11,6 +11,9 @@ const envSchema = z.object({
   LOG_LEVEL: z.string().default("info"),
   PUSH_PROVIDER: z.string().optional(),
   EXPO_ACCESS_TOKEN: z.string().optional(),
+  ANTHROPIC_API_KEY: z.string().optional(),
+  EMBEDDING_PROVIDER: z.string().optional(),
+  SUMMARIZATION_PROVIDER: z.string().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;
