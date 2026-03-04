@@ -60,6 +60,7 @@ describe("userRouter", () => {
       user: authenticated ? { sub: "user123", email: "test@example.com" } : null,
       db: mockDb as any,
       pubsub: mockPubsub as any,
+      rawToken: null,
     });
 
   beforeEach(() => {
