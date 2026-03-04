@@ -49,8 +49,10 @@ export function createArcCommand(): Command {
 
       for (const result of response.results) {
         console.log("---");
+        const conf = (result as { confidence?: string }).confidence;
+        const badge = conf ? ` [${conf}]` : "";
         console.log(
-          `## ${result.name} (score: ${result.similarity.toFixed(2)})`,
+          `## ${result.name} (score: ${result.similarity.toFixed(2)})${badge}`,
         );
         if (result.description) {
           console.log(result.description);

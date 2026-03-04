@@ -19,7 +19,7 @@ describe("createPgVectorSearchAdapter", () => {
     mockDb = { execute: vi.fn() };
   });
 
-  it("returns search results on success", async () => {
+  it("returns search results with confidence tiers", async () => {
     const mockRows = [
       {
         specId: "spec-1",
@@ -45,7 +45,9 @@ describe("createPgVectorSearchAdapter", () => {
     });
 
     expect(result.success).toBe(true);
-    expect(result.results).toEqual(mockRows);
+    expect(result.results).toHaveLength(2);
+    expect(result.results![0].confidence).toBe("high");
+    expect(result.results![1].confidence).toBe("high");
     expect(mockDb.execute).toHaveBeenCalledTimes(1);
   });
 
@@ -68,10 +70,11 @@ describe("createPgVectorSearchAdapter", () => {
     });
 
     expect(result.success).toBe(true);
-    expect(result.results).toEqual(mockRows);
+    expect(result.results).toHaveLength(1);
+    expect(result.results![0].confidence).toBe("high");
   });
 
-  it("uses default limit of 10 and threshold of 0.5", async () => {
+  it("uses default floor threshold of 0.1", async () => {
     mockDb.execute.mockResolvedValue([]);
 
     const adapter = createPgVectorSearchAdapter({ db: mockDb });
@@ -136,5 +139,65 @@ describe("createPgVectorSearchAdapter", () => {
 
     expect(result.success).toBe(true);
     expect(result.results).toEqual([]);
+  });
+
+  // ─── Graded descent ──────────────────────────────────────────────
+
+  it("returns only high-confidence results when available", async () => {
+    mockDb.execute.mockResolvedValue([
+      { specId: "s1", name: "A", description: "", content: "", similarity: 0.7 },
+      { specId: "s2", name: "B", description: "", content: "", similarity: 0.55 },
+      { specId: "s3", name: "C", description: "", content: "", similarity: 0.35 },
+      { specId: "s4", name: "D", description: "", content: "", similarity: 0.15 },
+    ]);
+
+    const adapter = createPgVectorSearchAdapter({ db: mockDb });
+    const result = await adapter.search({ embedding: [0.1] });
+
+    expect(result.results).toHaveLength(2);
+    expect(result.results!.every((r) => r.confidence === "high")).toBe(true);
+  });
+
+  it("falls back to moderate tier when no high-confidence results", async () => {
+    mockDb.execute.mockResolvedValue([
+      { specId: "s1", name: "A", description: "", content: "", similarity: 0.42 },
+      { specId: "s2", name: "B", description: "", content: "", similarity: 0.35 },
+      { specId: "s3", name: "C", description: "", content: "", similarity: 0.12 },
+    ]);
+
+    const adapter = createPgVectorSearchAdapter({ db: mockDb });
+    const result = await adapter.search({ embedding: [0.1] });
+
+    expect(result.results).toHaveLength(2);
+    expect(result.results!.every((r) => r.confidence === "moderate")).toBe(true);
+  });
+
+  it("falls back to low tier when no moderate or high results", async () => {
+    mockDb.execute.mockResolvedValue([
+      { specId: "s1", name: "A", description: "", content: "", similarity: 0.22 },
+      { specId: "s2", name: "B", description: "", content: "", similarity: 0.15 },
+    ]);
+
+    const adapter = createPgVectorSearchAdapter({ db: mockDb });
+    const result = await adapter.search({ embedding: [0.1] });
+
+    expect(result.results).toHaveLength(2);
+    expect(result.results!.every((r) => r.confidence === "low")).toBe(true);
+  });
+
+  it("assigns correct confidence tiers to results", async () => {
+    mockDb.execute.mockResolvedValue([
+      { specId: "s1", name: "A", description: "", content: "", similarity: 0.6 },
+      { specId: "s2", name: "B", description: "", content: "", similarity: 0.5 },
+      { specId: "s3", name: "C", description: "", content: "", similarity: 0.4 },
+    ]);
+
+    const adapter = createPgVectorSearchAdapter({ db: mockDb });
+    const result = await adapter.search({ embedding: [0.1] });
+
+    // Only high-confidence results returned (graded descent)
+    expect(result.results).toHaveLength(2);
+    expect(result.results![0]).toMatchObject({ specId: "s1", confidence: "high" });
+    expect(result.results![1]).toMatchObject({ specId: "s2", confidence: "high" });
   });
 });
