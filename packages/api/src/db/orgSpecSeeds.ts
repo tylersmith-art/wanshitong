@@ -4203,4 +4203,2330 @@ vi.mock("../../services/notifications/index.js", () => ({
 - **Stale tokens?** They're cleaned automatically when Expo returns \\\`DeviceNotRegistered\\\`. Check logs for "Deleted stale push tokens".
 - **Welcome notification not sent on registration?** Check that the welcome notification queue was created in \\\`initJobs()\\\` and that \\\`enqueueJob\\\` is called in the user \\\`create\\\` mutation. Check pg-boss job state: \\\`SELECT * FROM pgboss.job WHERE name = 'welcome-notification'\\\`.`,
   },
+  {
+    name: 'Adding a New Entity',
+    description:
+      'Step-by-step guide for adding a new data entity end-to-end: Zod schemas, Drizzle table, tRPC router, client hook, frontend view, RBAC, and tests.',
+    content: `# Adding a New Entity
+
+Step-by-step guide for adding a new data entity (table, types, API, frontend, real-time sync, tests). This is the most common workflow — follow it top to bottom whenever you add something like posts, comments, projects, invoices, etc.
+
+This guide uses "posts" as the example. Replace with your entity name throughout.
+
+> **Note:** This is a step-by-step guide for future implementation. The example code shown below does not exist in the codebase yet -- it is a worked example. To add a new entity, follow the steps below and create each file as described.
+
+## Overview of Files You'll Touch
+
+\\\`\\\`\\\`
+packages/shared/src/schemas/post.ts       <- Zod schemas (source of truth for types)
+packages/shared/src/schemas/index.ts      <- Re-export new schemas
+packages/api/src/db/schema.ts             <- Drizzle table definition
+packages/api/src/routers/post.ts          <- tRPC router (CRUD + sync)
+packages/api/src/routers/index.ts         <- Wire router into appRouter
+packages/hooks/src/hooks/usePosts.ts      <- React Query hook with real-time sync
+packages/hooks/src/index.ts               <- Re-export the hook
+packages/web/src/views/Posts.tsx           <- Frontend view
+packages/web/src/App.tsx                   <- Route
+packages/web/src/components/NavBar.tsx     <- Nav link
+packages/shared/src/schemas/post.test.ts  <- Schema tests
+packages/api/src/routers/post.test.ts     <- Router tests
+\\\`\\\`\\\`
+
+---
+
+## Step 1: Define the Zod Schemas
+
+This is the source of truth. Every other layer derives its types from here.
+
+\\\`\\\`\\\`typescript
+// packages/shared/src/schemas/post.ts
+import { z } from "zod";
+
+export const CreatePostSchema = z.object({
+  title: z.string().min(1, "Title is required"),
+  body: z.string().min(1, "Body is required"),
+});
+
+export const PostSchema = CreatePostSchema.extend({
+  id: z.string().uuid(),
+  authorId: z.string().uuid(),
+  createdAt: z.date(),
+});
+
+export type Post = z.infer<typeof PostSchema>;
+export type CreatePost = z.infer<typeof CreatePostSchema>;
+\\\`\\\`\\\`
+
+Then re-export from the barrel:
+
+\\\`\\\`\\\`typescript
+// packages/shared/src/schemas/index.ts — add these lines
+export {
+  CreatePostSchema,
+  PostSchema,
+  type Post,
+  type CreatePost,
+} from "./post.js";
+\\\`\\\`\\\`
+
+Rebuild shared so downstream packages see the new types:
+
+\\\`\\\`\\\`bash
+pnpm build --filter=@myapp/shared
+\\\`\\\`\\\`
+
+> **Why Zod?** The schemas serve triple duty: runtime validation on API inputs, TypeScript types via \\\`z.infer\\\`, and documentation of the data shape. Change the schema and the compiler tells you everywhere that needs updating.
+
+---
+
+## Step 2: Define the Database Table
+
+\\\`\\\`\\\`typescript
+// packages/api/src/db/schema.ts — add below the users table
+export const posts = pgTable("posts", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  title: varchar("title", { length: 255 }).notNull(),
+  body: varchar("body", { length: 10000 }).notNull(),
+  authorId: uuid("author_id").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+\\\`\\\`\\\`
+
+Generate and apply the migration:
+
+\\\`\\\`\\\`bash
+pnpm db:generate   # creates SQL migration in packages/api/drizzle/
+pnpm db:migrate    # applies it to Postgres
+\\\`\\\`\\\`
+
+**Keep the Drizzle schema and Zod schema aligned.** The Drizzle table is what Postgres sees; the Zod schema is what the API and clients see. They don't have to be identical (the Zod schema might omit internal columns or transform types), but the fields clients interact with should match.
+
+---
+
+## Step 3: Create the tRPC Router
+
+\\\`\\\`\\\`typescript
+// packages/api/src/routers/post.ts
+import { z } from "zod";
+import { eq } from "drizzle-orm";
+import { tracked, TRPCError } from "@trpc/server";
+import {
+  CreatePostSchema,
+  syncChannel,
+  type SyncEvent,
+  type Post,
+} from "@myapp/shared";
+import { router, publicProcedure, protectedProcedure } from "../trpc.js";
+import { posts } from "../db/schema.js";
+import { iterateEvents } from "../lib/iterateEvents.js";
+
+let eventId = 0;
+
+export const postRouter = router({
+  // READ — public, no auth required
+  list: publicProcedure.query(async ({ ctx }) => {
+    return ctx.db.select().from(posts).orderBy(posts.createdAt);
+  }),
+
+  // REAL-TIME — public subscription for live updates
+  onSync: publicProcedure.subscription(async function* ({ ctx, signal }) {
+    for await (const event of iterateEvents<SyncEvent<Post>>(
+      ctx.pubsub,
+      syncChannel("post"),
+      signal!,
+    )) {
+      yield tracked(String(++eventId), event);
+    }
+  }),
+
+  // CREATE — requires authentication
+  create: protectedProcedure
+    .input(CreatePostSchema)
+    .mutation(async ({ ctx, input }) => {
+      const [post] = await ctx.db
+        .insert(posts)
+        .values({ ...input, authorId: ctx.user.sub })
+        .returning();
+
+      // Broadcast to all connected clients
+      await ctx.pubsub.publish(syncChannel("post"), {
+        action: "created",
+        data: post,
+        timestamp: Date.now(),
+      } satisfies SyncEvent<typeof post>);
+
+      return post;
+    }),
+
+  // DELETE — requires authentication
+  delete: protectedProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const [deleted] = await ctx.db
+        .delete(posts)
+        .where(eq(posts.id, input.id))
+        .returning();
+
+      if (!deleted) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Post not found" });
+      }
+
+      await ctx.pubsub.publish(syncChannel("post"), {
+        action: "deleted",
+        data: deleted,
+        timestamp: Date.now(),
+      } satisfies SyncEvent<typeof deleted>);
+
+      return { success: true };
+    }),
+});
+\\\`\\\`\\\`
+
+#### Update Mutations
+
+Many entities need an update mutation beyond create and delete. The user router includes a \\\`touch\\\` mutation that updates a single field:
+
+\\\`\\\`\\\`typescript
+touch: protectedProcedure
+  .input(CreateUserSchema.pick({ email: true }))
+  .mutation(async ({ ctx, input }) => {
+    const [user] = await ctx.db
+      .update(users)
+      .set({ lastLoginAt: new Date() })
+      .where(eq(users.email, input.email))
+      .returning();
+
+    if (user) {
+      await ctx.pubsub.publish(syncChannel("user"), {
+        action: "updated",
+        data: user,
+        timestamp: Date.now(),
+      } satisfies SyncEvent<typeof user>);
+    }
+
+    return user ?? null;
+  }),
+\\\`\\\`\\\`
+
+For full entity updates, use \\\`UpdateEntitySchema\\\` (a partial of the create schema plus the entity ID) as the input, and \\\`.set()\\\` only the fields provided.
+
+Wire it into the app router:
+
+\\\`\\\`\\\`typescript
+// packages/api/src/routers/index.ts
+import { postRouter } from "./post.js";
+
+export const appRouter = router({
+  user: userRouter,
+  admin: adminRouter,
+  jobs: jobsRouter,
+  post: postRouter,  // add here
+});
+\\\`\\\`\\\`
+
+**Key decisions:**
+- \\\`publicProcedure\\\` vs \\\`protectedProcedure\\\` vs \\\`adminProcedure\\\` — choose based on who should access each operation
+- Every mutation that changes data should publish a \\\`SyncEvent\\\` so connected clients stay in sync
+- Use \\\`satisfies SyncEvent<typeof post>\\\` for type safety on the published event
+
+---
+
+## Step 3b: Add Role-Based Access (If Needed)
+
+Not every entity needs role restrictions — the basic example above uses \\\`protectedProcedure\\\` (any logged-in user) for writes and \\\`publicProcedure\\\` for reads. But if your entity needs admin-only operations or owner-only access, here's how.
+
+### Admin-only operations
+
+Import \\\`adminProcedure\\\` from the middleware and use it instead of \\\`protectedProcedure\\\`:
+
+\\\`\\\`\\\`typescript
+// packages/api/src/routers/post.ts
+import { adminProcedure } from "../middleware/requireRole.js";
+
+export const postRouter = router({
+  list: publicProcedure.query(/* ... */),           // anyone can read
+  create: protectedProcedure.mutation(/* ... */),    // any logged-in user can create
+  delete: adminProcedure.mutation(/* ... */),         // only admins can delete
+});
+\\\`\\\`\\\`
+
+\\\`adminProcedure\\\` does everything \\\`protectedProcedure\\\` does (JWT required) plus it looks up the caller's email in the \\\`users\\\` table and checks \\\`role === "admin"\\\`. If the check fails, it throws \\\`FORBIDDEN\\\`.
+
+### Owner-only operations
+
+For operations where a user should only modify their own records (e.g., "only the author can edit their post"), add an ownership check inside the procedure:
+
+\\\`\\\`\\\`typescript
+update: protectedProcedure
+  .input(UpdatePostSchema)
+  .mutation(async ({ ctx, input }) => {
+    // Fetch the existing record
+    const [existing] = await ctx.db
+      .select()
+      .from(posts)
+      .where(eq(posts.id, input.id))
+      .limit(1);
+
+    if (!existing) {
+      throw new TRPCError({ code: "NOT_FOUND" });
+    }
+
+    // Check ownership (admins bypass)
+    const email = ctx.user.email as string;
+    const [dbUser] = await ctx.db
+      .select()
+      .from(users)
+      .where(eq(users.email, email))
+      .limit(1);
+
+    if (existing.authorId !== ctx.user.sub && dbUser?.role !== "admin") {
+      throw new TRPCError({ code: "FORBIDDEN", message: "You can only edit your own posts" });
+    }
+
+    const [updated] = await ctx.db
+      .update(posts)
+      .set({ title: input.title, body: input.body })
+      .where(eq(posts.id, input.id))
+      .returning();
+
+    await ctx.pubsub.publish(syncChannel("post"), {
+      action: "updated",
+      data: updated,
+      timestamp: Date.now(),
+    } satisfies SyncEvent<typeof updated>);
+
+    return updated;
+  }),
+\\\`\\\`\\\`
+
+### Mixed access patterns
+
+A common pattern is different access levels per operation:
+
+| Operation | Procedure | Who can do it |
+|---|---|---|
+| \\\`list\\\` | \\\`publicProcedure\\\` | Anyone |
+| \\\`create\\\` | \\\`protectedProcedure\\\` | Any logged-in user |
+| \\\`update\\\` | \\\`protectedProcedure\\\` + ownership check | Author or admin |
+| \\\`delete\\\` | \\\`adminProcedure\\\` | Admins only |
+
+### Handling FORBIDDEN on the client
+
+When a procedure throws \\\`FORBIDDEN\\\`, the tRPC error has \\\`data.code === "FORBIDDEN"\\\`. Handle it in the UI:
+
+\\\`\\\`\\\`typescript
+const { data, error } = trpc.post.list.useQuery();
+
+if (error?.data?.code === "FORBIDDEN") {
+  return <div>You don't have permission to view this.</div>;
+}
+\\\`\\\`\\\`
+
+The Admin view already demonstrates this pattern — it shows a "Claim Admin" button when the listUsers query returns FORBIDDEN.
+
+---
+
+## Step 4: Create the Client Hook
+
+\\\`\\\`\\\`typescript
+// packages/hooks/src/hooks/usePosts.ts
+import { trpc } from "../trpc.js";
+import { useSyncSubscription } from "../lib/useSyncSubscription.js";
+
+type SerializedPost = {
+  id: string;
+  title: string;
+  body: string;
+  authorId: string;
+  createdAt: string;  // dates serialize as strings over the wire
+};
+
+export function usePosts() {
+  const utils = trpc.useUtils();
+  const listQuery = trpc.post.list.useQuery();
+
+  // Subscribe to real-time sync events using the shared helper
+  useSyncSubscription<SerializedPost>(trpc.post.onSync, {
+    onCreated: (data) =>
+      utils.post.list.setData(undefined, (old) =>
+        old ? [...old, data] : [data],
+      ),
+    onUpdated: (data) =>
+      utils.post.list.setData(undefined, (old) =>
+        old ? old.map((p) => (p.id === data.id ? data : p)) : old,
+      ),
+    onDeleted: () => {
+      utils.post.list.invalidate();
+    },
+  });
+
+  const createMutation = trpc.post.create.useMutation({
+    onSuccess: () => utils.post.list.invalidate(),
+  });
+  const deleteMutation = trpc.post.delete.useMutation({
+    onSuccess: () => utils.post.list.invalidate(),
+  });
+
+  return {
+    posts: listQuery.data ?? [],
+    isLoading: listQuery.isLoading,
+    error: listQuery.error?.message ?? null,
+    createPost: createMutation.mutateAsync,
+    deletePost: deleteMutation.mutateAsync,
+    isCreating: createMutation.isPending,
+    isDeleting: deleteMutation.isPending,
+  };
+}
+\\\`\\\`\\\`
+
+Re-export from the hooks barrel:
+
+\\\`\\\`\\\`typescript
+// packages/hooks/src/index.ts — add this line
+export { usePosts } from "./hooks/usePosts.js";
+\\\`\\\`\\\`
+
+**Why \\\`useSyncSubscription\\\` instead of raw \\\`useSubscription\\\`?** The \\\`useSyncSubscription\\\` helper wraps tRPC's \\\`useSubscription\\\` and dispatches \\\`SyncEvent\\\` actions to typed callbacks (\\\`onCreated\\\`, \\\`onUpdated\\\`, \\\`onDeleted\\\`). It eliminates the boilerplate switch statement and keeps every entity hook consistent.
+
+**Why \\\`SerializedPost\\\` instead of the Zod \\\`Post\\\` type?** Dates come over the wire as ISO strings, not \\\`Date\\\` objects. The serialized type matches what tRPC actually delivers. The Zod schema defines the canonical shape; the serialized type is what the client works with.
+
+**Why both \\\`onSync\\\` and \\\`onSuccess: invalidate()\\\`?** The sync subscription handles updates from _other_ clients. The \\\`onSuccess\\\` invalidation handles the current client's own mutations as a fallback (in case the WebSocket event arrives late or the subscription isn't active).
+
+---
+
+## Step 5: Build the Frontend View
+
+\\\`\\\`\\\`tsx
+// packages/web/src/views/Posts.tsx
+import { useState } from "react";
+import { useAuth0 } from "@auth0/auth0-react";
+import { usePosts } from "@myapp/hooks";
+
+export function Posts() {
+  const { isAuthenticated } = useAuth0();
+  const { posts, isLoading, error, createPost, isCreating } = usePosts();
+  const [title, setTitle] = useState("");
+  const [body, setBody] = useState("");
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!title || !body) return;
+    await createPost({ title, body });
+    setTitle("");
+    setBody("");
+  };
+
+  return (
+    <div className="max-w-[700px] mx-auto">
+      <h1 className="text-2xl font-bold mb-1">Posts</h1>
+      <p className="text-gray-500 mb-8">Real-time synced across all clients.</p>
+
+      {error && (
+        <div className="bg-red-50 text-red-600 p-3 rounded mb-4">{error}</div>
+      )}
+
+      {isAuthenticated ? (
+        <div className="bg-white border border-gray-200 rounded-lg p-6 mb-8">
+          <h2 className="text-lg font-semibold mb-4">Create Post</h2>
+          <form onSubmit={handleSubmit} className="flex flex-col gap-2">
+            <input
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="Title"
+              required
+              className="px-3 py-2 border border-gray-300 rounded text-sm"
+            />
+            <textarea
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+              placeholder="Body"
+              required
+              rows={3}
+              className="px-3 py-2 border border-gray-300 rounded text-sm"
+            />
+            <button
+              type="submit"
+              disabled={isCreating}
+              className="self-end px-5 py-2 bg-indigo-600 text-white rounded text-sm cursor-pointer disabled:opacity-60"
+            >
+              {isCreating ? "Creating..." : "Create"}
+            </button>
+          </form>
+        </div>
+      ) : (
+        <p className="text-gray-400 italic mb-8">Log in to create posts.</p>
+      )}
+
+      <h2 className="text-lg font-semibold mb-4">All Posts</h2>
+      {isLoading ? (
+        <p className="text-gray-400 text-center p-8">Loading...</p>
+      ) : posts.length ? (
+        <div className="space-y-4">
+          {posts.map((post) => (
+            <div key={post.id} className="bg-white border border-gray-200 rounded-lg p-4">
+              <h3 className="font-semibold">{post.title}</h3>
+              <p className="text-gray-600 text-sm mt-1">{post.body}</p>
+              <p className="text-gray-400 text-xs mt-2">
+                {post.authorId} &middot; {new Date(post.createdAt).toLocaleDateString()}
+              </p>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-gray-400 text-center p-8">No posts yet.</p>
+      )}
+    </div>
+  );
+}
+\\\`\\\`\\\`
+
+Add the route and nav link:
+
+\\\`\\\`\\\`typescript
+// packages/web/src/App.tsx — add import and route
+import { Posts } from "./views/Posts.js";
+
+<Route path="/posts" element={<Posts />} />
+\\\`\\\`\\\`
+
+\\\`\\\`\\\`typescript
+// packages/web/src/components/NavBar.tsx — add link alongside Users
+<Link
+  to="/posts"
+  className={\\\`no-underline font-medium \\\${isActive("/posts") ? "text-gray-900" : "text-gray-500"}\\\`}
+>
+  Posts
+</Link>
+\\\`\\\`\\\`
+
+---
+
+## Step 6: Add Seed Data (Optional)
+
+\\\`\\\`\\\`typescript
+// packages/api/src/db/seed.ts — add to the seed script
+const seedPosts = [
+  { title: "Welcome", body: "First post in the system.", authorId: "550e8400-e29b-41d4-a716-446655440000" },
+  { title: "Getting Started", body: "Here's how to use the app.", authorId: "660e8400-e29b-41d4-a716-446655440000" },
+];
+
+for (const post of seedPosts) {
+  const existing = await db.select().from(posts).where(eq(posts.title, post.title)).limit(1);
+  if (existing.length === 0) {
+    await db.insert(posts).values(post);
+    console.log(\\\`  Created post: \\\${post.title}\\\`);
+  } else {
+    console.log(\\\`  Skipped post: \\\${post.title} (already exists)\\\`);
+  }
+}
+\\\`\\\`\\\`
+
+Don't forget to import \\\`posts\\\` from the schema at the top of the seed file.
+
+---
+
+## Step 7: Write Tests
+
+### Schema tests
+
+\\\`\\\`\\\`typescript
+// packages/shared/src/schemas/post.test.ts
+import { describe, it, expect } from "vitest";
+import { CreatePostSchema, PostSchema } from "./post.js";
+
+describe("CreatePostSchema", () => {
+  it("accepts valid input", () => {
+    const result = CreatePostSchema.safeParse({ title: "Hello", body: "World" });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects empty title", () => {
+    const result = CreatePostSchema.safeParse({ title: "", body: "World" });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects missing body", () => {
+    const result = CreatePostSchema.safeParse({ title: "Hello" });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe("PostSchema", () => {
+  it("accepts valid post", () => {
+    const result = PostSchema.safeParse({
+      id: "550e8400-e29b-41d4-a716-446655440000",
+      title: "Hello",
+      body: "World",
+      authorId: "550e8400-e29b-41d4-a716-446655440000",
+      createdAt: new Date(),
+    });
+    expect(result.success).toBe(true);
+  });
+});
+\\\`\\\`\\\`
+
+### Router tests
+
+\\\`\\\`\\\`typescript
+// packages/api/src/routers/post.test.ts
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+vi.mock("../db/index.js", () => ({
+  getConnectionString: vi.fn(() => "postgresql://mock"),
+  getDb: vi.fn(() => ({})),
+}));
+vi.mock("jose", () => ({
+  createRemoteJWKSet: vi.fn(() => "mock"),
+  jwtVerify: vi.fn().mockResolvedValue({
+    payload: { sub: "u1", email: "test@test.com" },
+    protectedHeader: { alg: "RS256" },
+  }),
+}));
+
+import { appRouter } from "./index.js";
+
+const mockPost = {
+  id: "550e8400-e29b-41d4-a716-446655440000",
+  title: "Test",
+  body: "Content",
+  authorId: "660e8400-e29b-41d4-a716-446655440000",
+  createdAt: new Date(),
+};
+
+const mockDb = {
+  select: vi.fn().mockReturnThis(),
+  from: vi.fn().mockReturnThis(),
+  orderBy: vi.fn().mockResolvedValue([mockPost]),
+  insert: vi.fn().mockReturnThis(),
+  values: vi.fn().mockReturnThis(),
+  returning: vi.fn().mockResolvedValue([mockPost]),
+  delete: vi.fn().mockReturnThis(),
+  where: vi.fn().mockReturnThis(),
+};
+
+const mockPubsub = {
+  publish: vi.fn().mockResolvedValue(undefined),
+  subscribe: vi.fn(),
+  close: vi.fn(),
+};
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mockDb.select.mockReturnThis();
+  mockDb.from.mockReturnThis();
+  mockDb.orderBy.mockResolvedValue([mockPost]);
+  mockDb.insert.mockReturnThis();
+  mockDb.values.mockReturnThis();
+  mockDb.returning.mockResolvedValue([mockPost]);
+  mockDb.delete.mockReturnThis();
+  mockDb.where.mockReturnThis();
+});
+
+describe("postRouter", () => {
+  it("list returns posts", async () => {
+    const caller = appRouter.createCaller({ user: null, db: mockDb as any, pubsub: mockPubsub as any });
+    const result = await caller.post.list();
+    expect(result).toEqual([mockPost]);
+  });
+
+  it("create requires auth", async () => {
+    const caller = appRouter.createCaller({ user: null, db: mockDb as any, pubsub: mockPubsub as any });
+    await expect(caller.post.create({ title: "Hi", body: "World" })).rejects.toThrow("UNAUTHORIZED");
+  });
+
+  it("create inserts and publishes sync event", async () => {
+    const caller = appRouter.createCaller({
+      user: { sub: "u1", email: "test@test.com" },
+      db: mockDb as any,
+      pubsub: mockPubsub as any,
+    });
+    const result = await caller.post.create({ title: "Hi", body: "World" });
+    expect(result).toEqual(mockPost);
+    expect(mockPubsub.publish).toHaveBeenCalledWith(
+      "sync:post",
+      expect.objectContaining({ action: "created" }),
+    );
+  });
+});
+\\\`\\\`\\\`
+
+Run all tests to verify:
+
+\\\`\\\`\\\`bash
+pnpm test
+\\\`\\\`\\\`
+
+---
+
+## Step 8: Build and Verify
+
+\\\`\\\`\\\`bash
+pnpm build       # all packages compile
+pnpm typecheck   # no type errors
+pnpm test        # all tests pass
+\\\`\\\`\\\`
+
+If everything passes, the entity is fully integrated. Start the dev server (\\\`pnpm dev\\\`) and verify the UI works end-to-end.
+
+---
+
+## Checklist
+
+Use this to make sure you haven't missed a layer:
+
+**Types & Schema**
+- [ ] Zod schemas in \\\`packages/shared/src/schemas/\\\` with types exported
+- [ ] Schemas re-exported from \\\`packages/shared/src/schemas/index.ts\\\`
+- [ ] Drizzle table in \\\`packages/api/src/db/schema.ts\\\`
+- [ ] Migration generated (\\\`pnpm db:generate\\\`) and applied (\\\`pnpm db:migrate\\\`)
+
+**API**
+- [ ] tRPC router with CRUD operations + \\\`onSync\\\` subscription
+- [ ] Router wired into \\\`packages/api/src/routers/index.ts\\\`
+- [ ] Correct procedure type per operation (\\\`publicProcedure\\\` / \\\`protectedProcedure\\\` / \\\`adminProcedure\\\`)
+- [ ] Owner-only operations check \\\`authorId === ctx.user.sub\\\` (with admin bypass if applicable)
+- [ ] Every mutation publishes a \\\`SyncEvent\\\` via \\\`ctx.pubsub.publish()\\\`
+
+**Client**
+- [ ] Client hook in \\\`packages/hooks/src/hooks/\\\` with sync subscription
+- [ ] Hook re-exported from \\\`packages/hooks/src/index.ts\\\`
+- [ ] Frontend view handles \\\`FORBIDDEN\\\` errors gracefully (not just generic error)
+- [ ] Frontend view with form (auth-gated) and list
+- [ ] Route added in \\\`App.tsx\\\` (with \\\`AuthGuard\\\` wrapper if the page requires login)
+- [ ] Nav link added in \\\`NavBar.tsx\\\` (if needed)
+
+**Quality**
+- [ ] Schema tests in \\\`packages/shared\\\`
+- [ ] Router tests in \\\`packages/api\\\` (including auth and role checks)
+- [ ] \\\`pnpm build && pnpm typecheck && pnpm test\\\` passes`,
+  },
+  {
+    name: 'Adding Sub-Entities',
+    description:
+      'How to add data that belongs to an existing entity: foreign keys, parent-scoped queries, joins, cascading deletes, nested schemas, and real-time sync decisions.',
+    content: `# Adding Sub-Entities
+
+How to add data that belongs to an existing entity — comments on a post, tasks in a project, line items on an invoice, notes on a user. The parent already exists; you're adding children that reference it with a foreign key.
+
+This guide builds on the Adding a New Entity guide. If the parent entity doesn't exist yet, do that first. This guide covers the parts that are different when there's a relationship: foreign keys, join queries, cascading deletes, nested Zod schemas, and what to publish for real-time sync.
+
+This guide uses "notes that belong to a user" as the example. Replace with your entities throughout.
+
+> **Note:** This is a step-by-step guide for future implementation. The example code shown below does not exist in the codebase yet -- it is a worked example. To add a sub-entity, follow the steps below and create each file as described.
+
+## Overview of Files You'll Touch
+
+Same set as adding any entity, plus you'll modify the parent's router and hook to expose the children.
+
+\\\`\\\`\\\`
+packages/shared/src/schemas/note.ts       <- Zod schemas (references parent ID)
+packages/shared/src/schemas/index.ts      <- Re-export
+packages/api/src/db/schema.ts             <- Drizzle table with foreign key
+packages/api/src/routers/note.ts          <- tRPC router (scoped to parent)
+packages/api/src/routers/index.ts         <- Wire into appRouter
+packages/hooks/src/hooks/useNotes.ts      <- React Query hook (takes parentId)
+packages/hooks/src/index.ts               <- Re-export
+packages/web/src/views/Notes.tsx          <- UI (or inline in parent view)
+\\\`\\\`\\\`
+
+---
+
+## Step 1: Define the Zod Schemas
+
+The create schema takes the parent ID as a required field. This is how the client tells the API which parent the child belongs to.
+
+\\\`\\\`\\\`typescript
+// packages/shared/src/schemas/note.ts
+import { z } from "zod";
+
+export const CreateNoteSchema = z.object({
+  userId: z.string().uuid(),
+  content: z.string().min(1, "Content is required"),
+});
+
+export const NoteSchema = CreateNoteSchema.extend({
+  id: z.string().uuid(),
+  createdAt: z.date(),
+});
+
+export type Note = z.infer<typeof NoteSchema>;
+export type CreateNote = z.infer<typeof CreateNoteSchema>;
+\\\`\\\`\\\`
+
+Re-export from the barrel:
+
+\\\`\\\`\\\`typescript
+// packages/shared/src/schemas/index.ts — add these lines
+export {
+  CreateNoteSchema,
+  NoteSchema,
+  type Note,
+  type CreateNote,
+} from "./note.js";
+\\\`\\\`\\\`
+
+Rebuild shared:
+
+\\\`\\\`\\\`bash
+pnpm build --filter=@myapp/shared
+\\\`\\\`\\\`
+
+**Should the create schema include the parent ID?** Yes. The alternative is passing the parent ID as a URL/path parameter and omitting it from the body schema, but tRPC doesn't have path parameters — everything goes through input. Including it in the schema also means the client gets type-checked at compile time.
+
+---
+
+## Step 2: Define the Database Table with a Foreign Key
+
+\\\`\\\`\\\`typescript
+// packages/api/src/db/schema.ts — add below the users table
+export const notes = pgTable("notes", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  content: varchar("content", { length: 5000 }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+\\\`\\\`\\\`
+
+Generate and apply the migration:
+
+\\\`\\\`\\\`bash
+pnpm db:generate
+pnpm db:migrate
+\\\`\\\`\\\`
+
+### Choosing \\\`onDelete\\\` behavior
+
+This is the most important decision for a sub-entity. It determines what happens to children when the parent is deleted.
+
+| Behavior | SQL | When to use |
+|---|---|---|
+| \\\`cascade\\\` | Children are deleted with the parent | Owned data that has no meaning without the parent (notes, line items, comments) |
+| \\\`set null\\\` | Foreign key becomes \\\`NULL\\\` | Data that should survive (e.g., posts by a deleted user — keep the post, clear the author) |
+| \\\`restrict\\\` | Parent delete is blocked if children exist | The parent shouldn't be deletable while children are active (e.g., can't delete a project with open tasks) |
+
+Most sub-entities use \\\`cascade\\\`. If you're unsure, ask: "does this child make sense without its parent?" If no, cascade. If yes, set null or restrict.
+
+For \\\`set null\\\`, the foreign key column must be nullable:
+
+\\\`\\\`\\\`typescript
+userId: uuid("user_id")
+  .references(() => users.id, { onDelete: "set null" }),  // no .notNull()
+\\\`\\\`\\\`
+
+---
+
+## Step 3: Create the tRPC Router (Scoped to Parent)
+
+The key difference from a standalone entity: **reads and writes are scoped to a parent ID**. The \\\`list\\\` procedure takes a parent ID input and filters by it. The \\\`create\\\` mutation attaches the parent ID to the insert.
+
+\\\`\\\`\\\`typescript
+// packages/api/src/routers/note.ts
+import { z } from "zod";
+import { eq } from "drizzle-orm";
+import { tracked } from "@trpc/server";
+import {
+  CreateNoteSchema,
+  syncChannel,
+  type SyncEvent,
+  type Note,
+} from "@myapp/shared";
+import { router, publicProcedure, protectedProcedure } from "../trpc.js";
+import { notes } from "../db/schema.js";
+import { iterateEvents } from "../lib/iterateEvents.js";
+
+let eventId = 0;
+
+export const noteRouter = router({
+  // LIST — scoped to a parent
+  list: publicProcedure
+    .input(z.object({ userId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      return ctx.db
+        .select()
+        .from(notes)
+        .where(eq(notes.userId, input.userId))
+        .orderBy(notes.createdAt);
+    }),
+
+  // REAL-TIME — subscribe to changes for a specific parent
+  onSync: publicProcedure.subscription(async function* ({ ctx, signal }) {
+    for await (const event of iterateEvents<SyncEvent<Note>>(
+      ctx.pubsub,
+      syncChannel("note"),
+      signal!,
+    )) {
+      yield tracked(String(++eventId), event);
+    }
+  }),
+
+  // CREATE — requires auth, attaches parent ID
+  create: protectedProcedure
+    .input(CreateNoteSchema)
+    .mutation(async ({ ctx, input }) => {
+      const [note] = await ctx.db
+        .insert(notes)
+        .values(input)
+        .returning();
+
+      await ctx.pubsub.publish(syncChannel("note"), {
+        action: "created",
+        data: note,
+        timestamp: Date.now(),
+      } satisfies SyncEvent<typeof note>);
+
+      return note;
+    }),
+
+  // DELETE — requires auth
+  delete: protectedProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const [deleted] = await ctx.db
+        .delete(notes)
+        .where(eq(notes.id, input.id))
+        .returning();
+
+      if (!deleted) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Note not found" });
+      }
+
+      await ctx.pubsub.publish(syncChannel("note"), {
+        action: "deleted",
+        data: deleted,
+        timestamp: Date.now(),
+      });
+
+      return { success: true };
+    }),
+});
+\\\`\\\`\\\`
+
+Wire it into the app router:
+
+\\\`\\\`\\\`typescript
+// packages/api/src/routers/index.ts
+import { noteRouter } from "./note.js";
+
+export const appRouter = router({
+  user: userRouter,
+  admin: adminRouter,
+  jobs: jobsRouter,
+  note: noteRouter,  // add here
+});
+\\\`\\\`\\\`
+
+### Should the router be nested under the parent?
+
+You have two options:
+
+**Flat (recommended for this template):** \\\`trpc.note.list({ userId })\\\` — a separate top-level router. Simpler routing, straightforward hook wiring.
+
+**Nested:** \\\`trpc.user.notes.list({ userId })\\\` — a sub-router merged into the parent. Better conceptual grouping, but tRPC nested routers add complexity for marginal benefit.
+
+This guide uses flat routing. If you prefer nested, create the note router the same way but merge it into the user router instead of the app router.
+
+### What about ownership checks?
+
+If only the parent's owner should manage children, add the same ownership check pattern from the Adding a New Entity guide (Step 3b):
+
+\\\`\\\`\\\`typescript
+create: protectedProcedure
+  .input(CreateNoteSchema)
+  .mutation(async ({ ctx, input }) => {
+    // Verify the caller owns the parent
+    const [parent] = await ctx.db
+      .select()
+      .from(users)
+      .where(eq(users.id, input.userId))
+      .limit(1);
+
+    if (!parent) throw new TRPCError({ code: "NOT_FOUND" });
+
+    const callerEmail = ctx.user.email as string;
+    if (parent.email !== callerEmail) {
+      throw new TRPCError({ code: "FORBIDDEN", message: "Not your user profile" });
+    }
+
+    const [note] = await ctx.db.insert(notes).values(input).returning();
+    // ... publish sync event, return
+  }),
+\\\`\\\`\\\`
+
+---
+
+## Step 4: Querying Parent + Children Together (Joins)
+
+Sometimes you want to return children alongside their parent in a single query — e.g., listing users with their note count, or loading a user profile with their notes included.
+
+### Count children per parent
+
+\\\`\\\`\\\`typescript
+import { count, eq } from "drizzle-orm";
+
+const usersWithNoteCounts = await ctx.db
+  .select({
+    user: users,
+    noteCount: count(notes.id),
+  })
+  .from(users)
+  .leftJoin(notes, eq(notes.userId, users.id))
+  .groupBy(users.id)
+  .orderBy(users.createdAt);
+\\\`\\\`\\\`
+
+\\\`leftJoin\\\` ensures parents with zero children still appear. \\\`innerJoin\\\` would exclude them.
+
+### Load a parent with all its children
+
+\\\`\\\`\\\`typescript
+// Option A: Two queries (simpler, often faster)
+const [user] = await ctx.db.select().from(users).where(eq(users.id, userId)).limit(1);
+const userNotes = await ctx.db.select().from(notes).where(eq(notes.userId, userId)).orderBy(notes.createdAt);
+return { ...user, notes: userNotes };
+
+// Option B: Join query (one round trip, more complex result shape)
+const rows = await ctx.db
+  .select({ user: users, note: notes })
+  .from(users)
+  .leftJoin(notes, eq(notes.userId, users.id))
+  .where(eq(users.id, userId));
+
+// Drizzle returns one row per join match, so you need to reshape:
+const user = rows[0]?.user;
+const userNotes = rows.filter((r) => r.note !== null).map((r) => r.note!);
+return { ...user, notes: userNotes };
+\\\`\\\`\\\`
+
+**Which approach to use?** Two queries is clearer and works well for loading a single parent with its children. The join approach is better when loading many parents with children (avoids N+1). For most sub-entity cases in this template, two queries is fine.
+
+### Zod schema for the joined response
+
+If you're returning nested data, add a schema for it:
+
+\\\`\\\`\\\`typescript
+// packages/shared/src/schemas/note.ts — add at the bottom
+export const UserWithNotesSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string().min(1, "Name is required"),
+  email: z.string().email(),
+  role: RoleSchema.default("user"),
+  avatarUrl: z.string().url().nullable().default(null),
+  lastLoginAt: z.date().nullable().default(null),
+  createdAt: z.date(),
+  notes: z.array(NoteSchema),
+});
+
+export type UserWithNotes = z.infer<typeof UserWithNotesSchema>;
+\\\`\\\`\\\`
+
+You don't always need this. If the joined response is only used by one procedure and never validated elsewhere, the TypeScript return type from the query is sufficient. Add the Zod schema when the nested shape is part of your public API contract or used in multiple places.
+
+---
+
+## Step 5: Real-Time Sync Decisions
+
+When a child is created, updated, or deleted, you need to decide what to publish and who should care.
+
+### Option A: Publish the child only (recommended for most cases)
+
+\\\`\\\`\\\`typescript
+await ctx.pubsub.publish(syncChannel("note"), {
+  action: "created",
+  data: note,
+  timestamp: Date.now(),
+});
+\\\`\\\`\\\`
+
+The child hook (\\\`useNotes\\\`) subscribes to \\\`sync:note\\\` and updates its own cache. The parent hook (\\\`useUsers\\\`) doesn't need to know.
+
+**Use when:** The parent view doesn't show child data inline. Notes are viewed on a separate page or section.
+
+### Option B: Publish the child AND invalidate the parent
+
+\\\`\\\`\\\`typescript
+// Publish the child event
+await ctx.pubsub.publish(syncChannel("note"), {
+  action: "created",
+  data: note,
+  timestamp: Date.now(),
+});
+
+// Also notify parent subscribers (e.g., if the parent view shows a note count)
+await ctx.pubsub.publish(syncChannel("user"), {
+  action: "updated",
+  data: { id: input.userId },
+  timestamp: Date.now(),
+});
+\\\`\\\`\\\`
+
+**Use when:** The parent view shows aggregated child info (counts, latest child, status derived from children). The parent hook receives the "updated" event and refetches.
+
+### Option C: Publish the parent with children embedded
+
+\\\`\\\`\\\`typescript
+const updatedUser = await ctx.db.select().from(users).where(eq(users.id, input.userId)).limit(1);
+const userNotes = await ctx.db.select().from(notes).where(eq(notes.userId, input.userId));
+
+await ctx.pubsub.publish(syncChannel("user"), {
+  action: "updated",
+  data: { ...updatedUser[0], notes: userNotes },
+  timestamp: Date.now(),
+});
+\\\`\\\`\\\`
+
+**Use when:** Rarely. This increases message size and couples the parent and child sync channels. Usually Option A or B is better.
+
+---
+
+## Step 6: Create the Client Hook (Scoped to Parent)
+
+The hook takes a parent ID and passes it to the list query. The sync subscription filters events by parent ID on the client side.
+
+\\\`\\\`\\\`typescript
+// packages/hooks/src/hooks/useNotes.ts
+import { trpc } from "../trpc.js";
+import { useSyncSubscription } from "../lib/useSyncSubscription.js";
+
+type SerializedNote = {
+  id: string;
+  userId: string;
+  content: string;
+  createdAt: string;
+};
+
+export function useNotes(userId: string) {
+  const utils = trpc.useUtils();
+  const listQuery = trpc.note.list.useQuery({ userId });
+
+  // Subscribe to real-time sync events using the shared helper.
+  // The callbacks filter by parent ID so events for other parents are ignored.
+  useSyncSubscription<SerializedNote>(trpc.note.onSync, {
+    onCreated: (data) => {
+      if (data.userId !== userId) return;
+      utils.note.list.setData({ userId }, (old) =>
+        old ? [...old, data] : [data],
+      );
+    },
+    onUpdated: (data) => {
+      if (data.userId !== userId) return;
+      utils.note.list.setData({ userId }, (old) =>
+        old ? old.map((n) => (n.id === data.id ? data : n)) : old,
+      );
+    },
+    onDeleted: (data) => {
+      if ("userId" in data && data.userId !== userId) return;
+      utils.note.list.invalidate({ userId });
+    },
+  });
+
+  const createMutation = trpc.note.create.useMutation({
+    onSuccess: () => utils.note.list.invalidate({ userId }),
+  });
+  const deleteMutation = trpc.note.delete.useMutation({
+    onSuccess: () => utils.note.list.invalidate({ userId }),
+  });
+
+  return {
+    notes: listQuery.data ?? [],
+    isLoading: listQuery.isLoading,
+    error: listQuery.error?.message ?? null,
+    createNote: (content: string) => createMutation.mutateAsync({ userId, content }),
+    deleteNote: (id: string) => deleteMutation.mutateAsync({ id }),
+    isCreating: createMutation.isPending,
+    isDeleting: deleteMutation.isPending,
+  };
+}
+\\\`\\\`\\\`
+
+Re-export from the hooks barrel:
+
+\\\`\\\`\\\`typescript
+// packages/hooks/src/index.ts — add this line
+export { useNotes } from "./hooks/useNotes.js";
+\\\`\\\`\\\`
+
+**Key differences from a top-level entity hook:**
+- Uses \\\`useSyncSubscription\\\` (same as top-level hooks) but each callback filters by parent ID before updating the cache
+- The hook takes \\\`userId\\\` as a parameter
+- \\\`listQuery\\\` passes \\\`{ userId }\\\` to scope the query
+- \\\`setData\\\` and \\\`invalidate\\\` pass \\\`{ userId }\\\` so React Query updates the right cache entry
+- \\\`createNote\\\` wraps the mutation to auto-attach the \\\`userId\\\` so the caller only passes \\\`content\\\`
+
+---
+
+## Step 7: Build the Frontend
+
+Sub-entity views can be standalone pages (e.g., \\\`/users/:userId/notes\\\`) or inline sections within the parent view.
+
+### As an inline section on the parent
+
+\\\`\\\`\\\`tsx
+// Inside an existing view — e.g., a user detail page
+import { useNotes } from "@myapp/hooks";
+
+function UserNotes({ userId }: { userId: string }) {
+  const { notes, isLoading, createNote, isCreating } = useNotes(userId);
+  const [content, setContent] = useState("");
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!content) return;
+    await createNote(content);
+    setContent("");
+  };
+
+  return (
+    <div>
+      <h3 className="text-lg font-semibold mb-3">Notes</h3>
+
+      <form onSubmit={handleSubmit} className="flex gap-2 mb-4">
+        <input
+          value={content}
+          onChange={(e) => setContent(e.target.value)}
+          placeholder="Add a note..."
+          required
+          className="flex-1 px-3 py-2 border border-gray-300 rounded text-sm"
+        />
+        <button
+          type="submit"
+          disabled={isCreating}
+          className="px-4 py-2 bg-indigo-600 text-white rounded text-sm cursor-pointer disabled:opacity-60"
+        >
+          {isCreating ? "Adding..." : "Add"}
+        </button>
+      </form>
+
+      {isLoading ? (
+        <p className="text-gray-400 text-sm">Loading...</p>
+      ) : notes.length ? (
+        <div className="space-y-2">
+          {notes.map((note) => (
+            <div key={note.id} className="bg-gray-50 p-3 rounded text-sm">
+              <p>{note.content}</p>
+              <p className="text-gray-400 text-xs mt-1">
+                {new Date(note.createdAt).toLocaleDateString()}
+              </p>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-gray-400 text-sm">No notes yet.</p>
+      )}
+    </div>
+  );
+}
+\\\`\\\`\\\`
+
+### As a standalone page with a route parameter
+
+\\\`\\\`\\\`tsx
+// packages/web/src/views/UserNotes.tsx
+import { useParams } from "react-router-dom";
+import { useNotes } from "@myapp/hooks";
+
+export function UserNotes() {
+  const { userId } = useParams<{ userId: string }>();
+  if (!userId) return <p>Missing user ID</p>;
+
+  const { notes, isLoading, createNote, isCreating } = useNotes(userId);
+  // ... same UI as above
+}
+\\\`\\\`\\\`
+
+\\\`\\\`\\\`typescript
+// packages/web/src/App.tsx — add route
+<Route path="/users/:userId/notes" element={<UserNotes />} />
+\\\`\\\`\\\`
+
+---
+
+## Step 8: Cascading Deletes and Sync
+
+If you used \\\`onDelete: "cascade"\\\` on the foreign key, Postgres automatically deletes children when the parent is deleted. But the client doesn't know about those cascaded deletes unless you handle it.
+
+### Option A: Invalidate the child cache when the parent is deleted
+
+In the parent's delete mutation, publish a sync event on the child's channel too:
+
+\\\`\\\`\\\`typescript
+// In the user router's delete mutation
+delete: protectedProcedure
+  .input(CreateUserSchema.pick({ email: true }))
+  .mutation(async ({ ctx, input }) => {
+    // Look up the user ID before deleting (we need it for the child sync)
+    const [user] = await ctx.db
+      .select()
+      .from(users)
+      .where(eq(users.email, input.email))
+      .limit(1);
+
+    await ctx.db.delete(users).where(eq(users.email, input.email));
+
+    // Notify user subscribers
+    await ctx.pubsub.publish(syncChannel("user"), {
+      action: "deleted",
+      data: input,
+      timestamp: Date.now(),
+    });
+
+    // Notify note subscribers — their cache for this user is now stale
+    if (user) {
+      await ctx.pubsub.publish(syncChannel("note"), {
+        action: "deleted",
+        data: { userId: user.id },
+        timestamp: Date.now(),
+      });
+    }
+
+    return { success: true };
+  }),
+\\\`\\\`\\\`
+
+### Option B: Let the client handle it naturally
+
+If the child view is only visible when the parent exists (e.g., it's a section on the parent's detail page), navigating away from the deleted parent unmounts the child hook. The stale cache entry is harmless and gets garbage-collected by React Query.
+
+Option B is usually fine. Only use Option A if children are visible independently of the parent (e.g., a "recent notes" feed that includes notes from all users).
+
+---
+
+## Step 9: Write Tests
+
+### Schema tests
+
+\\\`\\\`\\\`typescript
+// packages/shared/src/schemas/note.test.ts
+import { describe, it, expect } from "vitest";
+import { CreateNoteSchema, NoteSchema } from "./note.js";
+
+describe("CreateNoteSchema", () => {
+  it("accepts valid input", () => {
+    const result = CreateNoteSchema.safeParse({
+      userId: "550e8400-e29b-41d4-a716-446655440000",
+      content: "A note",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects missing userId", () => {
+    const result = CreateNoteSchema.safeParse({ content: "A note" });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects invalid userId format", () => {
+    const result = CreateNoteSchema.safeParse({ userId: "not-a-uuid", content: "A note" });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects empty content", () => {
+    const result = CreateNoteSchema.safeParse({
+      userId: "550e8400-e29b-41d4-a716-446655440000",
+      content: "",
+    });
+    expect(result.success).toBe(false);
+  });
+});
+\\\`\\\`\\\`
+
+### Router tests
+
+\\\`\\\`\\\`typescript
+// packages/api/src/routers/note.test.ts
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+vi.mock("../db/index.js", () => ({
+  getConnectionString: vi.fn(() => "postgresql://mock"),
+  getDb: vi.fn(() => ({})),
+}));
+vi.mock("jose", () => ({
+  createRemoteJWKSet: vi.fn(() => "mock"),
+  jwtVerify: vi.fn().mockResolvedValue({
+    payload: { sub: "u1", email: "test@test.com" },
+    protectedHeader: { alg: "RS256" },
+  }),
+}));
+
+import { appRouter } from "./index.js";
+
+const mockNote = {
+  id: "550e8400-e29b-41d4-a716-446655440000",
+  userId: "660e8400-e29b-41d4-a716-446655440000",
+  content: "Test note",
+  createdAt: new Date(),
+};
+
+const mockDb = {
+  select: vi.fn().mockReturnThis(),
+  from: vi.fn().mockReturnThis(),
+  where: vi.fn().mockReturnThis(),
+  orderBy: vi.fn().mockResolvedValue([mockNote]),
+  insert: vi.fn().mockReturnThis(),
+  values: vi.fn().mockReturnThis(),
+  returning: vi.fn().mockResolvedValue([mockNote]),
+  delete: vi.fn().mockReturnThis(),
+};
+
+const mockPubsub = { publish: vi.fn().mockResolvedValue(undefined) };
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mockDb.select.mockReturnThis();
+  mockDb.from.mockReturnThis();
+  mockDb.where.mockReturnThis();
+  mockDb.orderBy.mockResolvedValue([mockNote]);
+  mockDb.insert.mockReturnThis();
+  mockDb.values.mockReturnThis();
+  mockDb.returning.mockResolvedValue([mockNote]);
+  mockDb.delete.mockReturnThis();
+});
+
+describe("noteRouter", () => {
+  it("list returns notes for a user", async () => {
+    const caller = appRouter.createCaller({ user: null, db: mockDb as any, pubsub: mockPubsub as any });
+    const result = await caller.note.list({ userId: mockNote.userId });
+    expect(result).toEqual([mockNote]);
+  });
+
+  it("create requires auth", async () => {
+    const caller = appRouter.createCaller({ user: null, db: mockDb as any, pubsub: mockPubsub as any });
+    await expect(
+      caller.note.create({ userId: mockNote.userId, content: "Hello" }),
+    ).rejects.toThrow("UNAUTHORIZED");
+  });
+
+  it("create inserts and publishes sync event", async () => {
+    const caller = appRouter.createCaller({
+      user: { sub: "u1", email: "test@test.com" },
+      db: mockDb as any,
+      pubsub: mockPubsub as any,
+    });
+    const result = await caller.note.create({ userId: mockNote.userId, content: "Hello" });
+    expect(result).toEqual(mockNote);
+    expect(mockPubsub.publish).toHaveBeenCalledWith(
+      "sync:note",
+      expect.objectContaining({ action: "created" }),
+    );
+  });
+
+  it("delete removes note and publishes sync event", async () => {
+    const caller = appRouter.createCaller({
+      user: { sub: "u1", email: "test@test.com" },
+      db: mockDb as any,
+      pubsub: mockPubsub as any,
+    });
+    const result = await caller.note.delete({ id: mockNote.id });
+    expect(result).toEqual({ success: true });
+    expect(mockPubsub.publish).toHaveBeenCalledWith(
+      "sync:note",
+      expect.objectContaining({ action: "deleted" }),
+    );
+  });
+});
+\\\`\\\`\\\`
+
+Run all tests:
+
+\\\`\\\`\\\`bash
+pnpm test
+\\\`\\\`\\\`
+
+---
+
+## Checklist
+
+Everything from the Adding a New Entity checklist, plus:
+
+**Relationship**
+- [ ] Foreign key in Drizzle schema with appropriate \\\`onDelete\\\` behavior (\\\`cascade\\\`, \\\`set null\\\`, or \\\`restrict\\\`)
+- [ ] Migration generated and applied
+- [ ] Create schema includes the parent ID field (\\\`userId\\\`, \\\`projectId\\\`, etc.)
+
+**API**
+- [ ] \\\`list\\\` procedure takes parent ID as input and filters by it
+- [ ] \\\`create\\\` mutation includes the parent ID in the insert
+- [ ] Ownership check on mutations if only the parent's owner should manage children
+- [ ] Cascading delete handling — either notify child channel or rely on view unmounting
+
+**Client**
+- [ ] Hook takes parent ID as parameter
+- [ ] \\\`listQuery\\\`, \\\`setData\\\`, and \\\`invalidate\\\` all pass the parent ID to scope to the right cache entry
+- [ ] Sync subscription filters events by parent ID (ignores events for other parents)
+- [ ] \\\`createNote\\\` wrapper auto-attaches parent ID so callers only pass child fields
+
+**Joins (if needed)**
+- [ ] \\\`leftJoin\\\` for counts or optional children, \\\`innerJoin\\\` when children are required
+- [ ] Joined response reshaped from flat rows into nested structure
+- [ ] Zod schema for nested response if it's part of the public API contract
+
+---
+
+## Common Patterns
+
+### Multiple children on the same parent
+
+A user can have notes, tasks, and bookmarks. Each gets its own table, router, and hook — they all follow this same guide independently. They all reference \\\`users.id\\\` with their own foreign key.
+
+### Grandchildren (nested sub-entities)
+
+A project has tasks, a task has comments. Same pattern, one level deeper. The comment table references \\\`tasks.id\\\`, the comment router scopes by \\\`taskId\\\`, and the hook takes \\\`taskId\\\`. The cascading delete chain is: project deleted -> tasks cascade-deleted -> comments cascade-deleted.
+
+### Many-to-many relationships
+
+Users belong to multiple teams, teams have multiple users. This requires a join table:
+
+\\\`\\\`\\\`typescript
+export const teamMembers = pgTable("team_members", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  teamId: uuid("team_id").notNull().references(() => teams.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  role: varchar("role", { length: 50 }).notNull().default("member"),
+  joinedAt: timestamp("joined_at", { withTimezone: true }).defaultNow().notNull(),
+});
+\\\`\\\`\\\`
+
+The router needs \\\`addMember\\\` and \\\`removeMember\\\` mutations instead of \\\`create\\\` and \\\`delete\\\`. The hook queries through the join table. Everything else follows the same principles.`,
+  },
+  {
+    name: 'Adding a Monorepo Package',
+    description:
+      'How to add a new package to the monorepo: pnpm workspace setup, TypeScript project references, turbo pipeline, barrel exports, and cross-package imports.',
+    content: `# Adding a Monorepo Package
+
+How to add a new package to the monorepo — a shared library, a background worker, an email service, a CLI tool. This covers the pnpm workspace, TypeScript project references, turbo pipeline, and cross-package imports that make it all work.
+
+## How the Monorepo Is Wired
+
+\\\`\\\`\\\`
+pnpm-workspace.yaml     <- declares packages/* as workspaces
+tsconfig.base.json      <- shared compiler options (all packages extend this)
+turbo.json              <- build pipeline ordering
+packages/
+  shared/               <- Zod schemas, types, utilities (no runtime deps)
+  api/                  <- Express + tRPC server (depends on shared)
+  hooks/                <- React Query hooks + tRPC client (depends on shared, api types)
+  web/                  <- React SPA (depends on hooks)
+  mobile/               <- Expo app (depends on hooks)
+\\\`\\\`\\\`
+
+### How dependencies flow
+
+\\\`\\\`\\\`
+shared  -->  api
+shared  -.>  hooks  -->  web
+api     -.>  hooks  -->  mobile
+shared  -->  mobile
+
+-->  = runtime dependency (dependencies)
+-.>  = type-only devDependency (devDependencies)
+\\\`\\\`\\\`
+
+\\\`shared\\\` has no internal dependencies — it's the leaf. Everything else depends on it. \\\`hooks\\\` lists both \\\`shared\\\` and \\\`api\\\` as **devDependencies** — it only uses them for types at build time, not at runtime. \\\`web\\\` and \\\`mobile\\\` depend on \\\`hooks\\\` as a runtime dependency.
+
+> **Client type export.** \\\`api\\\` exposes a \\\`./client\\\` subpath export (\\\`@myapp/api/client\\\`) that re-exports \\\`AppRouter\\\` without pulling in the server startup code from \\\`src/index.ts\\\`. \\\`hooks/src/trpc.ts\\\` imports from this subpath instead of reaching into \\\`api\\\` internals. The \\\`./client\\\` entry is defined in \\\`api/package.json\\\` under \\\`exports\\\` and backed by \\\`src/client.ts\\\`, which is a types-only barrel.
+
+### How turbo knows what to build first
+
+\\\`\\\`\\\`json
+// turbo.json
+"build": {
+  "dependsOn": ["^build"],  // build my dependencies first
+  "outputs": ["dist/**"]
+}
+\\\`\\\`\\\`
+
+The \\\`^build\\\` means "build all packages I depend on before building me." So \\\`pnpm build\\\` automatically builds \\\`shared\\\` -> \\\`hooks\\\` -> \\\`web\\\` (and \\\`shared\\\` -> \\\`api\\\`). You never need to specify the order manually.
+
+### How TypeScript resolves cross-package imports
+
+Two mechanisms work together:
+
+1. **\\\`workspace:*\\\` in package.json** — pnpm symlinks the package into \\\`node_modules\\\`, so \\\`import { UserSchema } from "@myapp/shared"\\\` resolves at runtime.
+
+2. **\\\`references\\\` in tsconfig.json** — TypeScript follows project references for type checking, so you get autocomplete and compile errors across packages.
+
+\\\`\\\`\\\`json
+// packages/api/tsconfig.json
+{
+  "references": [
+    { "path": "../shared" }   // TypeScript knows about shared's types
+  ]
+}
+\\\`\\\`\\\`
+
+### How barrel exports work
+
+Each package has an \\\`src/index.ts\\\` that re-exports its public API. Consumers import from the package name, never from internal paths:
+
+\\\`\\\`\\\`typescript
+// YES — import from the package
+import { UserSchema, type User } from "@myapp/shared";
+
+// NO — reaching into internal files
+import { UserSchema } from "@myapp/shared/src/schemas/user.js";
+\\\`\\\`\\\`
+
+The \\\`exports\\\` field in package.json maps the package name to the built output:
+
+\\\`\\\`\\\`json
+// packages/shared/package.json
+"exports": {
+  ".": {
+    "import": "./dist/index.js",
+    "types": "./dist/index.d.ts"
+  }
+}
+\\\`\\\`\\\`
+
+---
+
+## Adding a New Package
+
+### 1. Create the directory and package.json
+
+\\\`\\\`\\\`bash
+mkdir -p packages/worker/src
+\\\`\\\`\\\`
+
+\\\`\\\`\\\`json
+// packages/worker/package.json
+{
+  "name": "@myapp/worker",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@myapp/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}
+\\\`\\\`\\\`
+
+Key details:
+- **\\\`"type": "module"\\\`** — all packages use ESM
+- **\\\`"private": true\\\`** — monorepo packages aren't published to npm
+- **\\\`workspace:*\\\`** — tells pnpm to use the local version of \\\`@myapp/shared\\\`
+- **\\\`exports\\\`** — required for other packages to import from \\\`@myapp/worker\\\`
+
+> **Exception: Expo apps** — The \\\`mobile\\\` package does not follow the standard ESM setup. Expo apps use their own conventions: no \\\`"type": "module"\\\`, no \\\`"exports"\\\` field, no \\\`"build"\\\` script, and \\\`tsconfig.json\\\` extends \\\`expo/tsconfig.base\\\` instead of the monorepo base. This is expected — Expo's toolchain handles bundling and TypeScript differently from Node.js library packages.
+
+### 2. Create tsconfig.json
+
+\\\`\\\`\\\`json
+// packages/worker/tsconfig.json
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "composite": true
+  },
+  "include": ["src"],
+  "references": [
+    { "path": "../shared" }
+  ]
+}
+\\\`\\\`\\\`
+
+Key details:
+- **\\\`extends\\\`** — inherits strict mode, ESM, source maps from \\\`tsconfig.base.json\\\`
+- **\\\`composite: true\\\`** — only required for library packages that other packages import from (e.g., \\\`shared\\\`, or a \\\`worker\\\` that \\\`api\\\` imports from). Frontend apps like \\\`web\\\` and \\\`mobile\\\` don't need it since nothing imports from them — \\\`web\\\` correctly omits it.
+- **\\\`references\\\`** — list every internal package this one imports from. If you use \\\`@myapp/shared\\\`, add \\\`{ "path": "../shared" }\\\`.
+
+### 3. Create the barrel export
+
+\\\`\\\`\\\`typescript
+// packages/worker/src/index.ts
+export { processQueue } from "./queue.js";
+export type { QueueJob } from "./types.js";
+\\\`\\\`\\\`
+
+Only export what other packages need. Internal implementation stays unexported.
+
+### 4. Add tests (if applicable)
+
+\\\`\\\`\\\`typescript
+// packages/worker/vitest.config.ts
+import { defineConfig } from "vitest/config";
+
+export default defineConfig({
+  test: {
+    environment: "node",
+    include: ["src/**/*.test.ts"],
+  },
+});
+\\\`\\\`\\\`
+
+### 5. Install dependencies
+
+\\\`\\\`\\\`bash
+pnpm install
+\\\`\\\`\\\`
+
+pnpm automatically picks up the new workspace package. No changes to \\\`pnpm-workspace.yaml\\\` needed — the glob \\\`packages/*\\\` already covers it.
+
+### 6. Verify the build chain
+
+\\\`\\\`\\\`bash
+pnpm build
+\\\`\\\`\\\`
+
+Turbo should build \\\`shared\\\` first (because \\\`worker\\\` depends on it), then \\\`worker\\\`. Check the turbo output to confirm the order is correct.
+
+---
+
+## Package Types and What They Need
+
+Not every package needs the same setup. Here's what differs:
+
+### Library package (shared code, imported by others)
+
+Examples: \\\`shared\\\`, a \\\`utils\\\` package, a \\\`validation\\\` package.
+
+\\\`\\\`\\\`json
+// tsconfig.json — needs composite for project references
+"compilerOptions": {
+  "composite": true,
+  "declaration": true,   // inherited from base, but worth noting
+}
+\\\`\\\`\\\`
+
+- **\\\`composite: true\\\`** — required so other packages can reference it
+- **\\\`exports\\\` in package.json** — required so imports resolve
+- **No \\\`dev\\\` script** — libraries don't run, they're built and imported. Use \\\`"dev": "tsc --watch"\\\` to rebuild on changes.
+
+### Server package (runs as a process)
+
+Examples: \\\`api\\\`, a background \\\`worker\\\`, a \\\`cron\\\` service.
+
+\\\`\\\`\\\`json
+// tsconfig.json — doesn't need composite (nothing imports from it)
+"compilerOptions": {
+  "outDir": "./dist",
+  "rootDir": "./src"
+  // no composite, no declaration needed
+}
+\\\`\\\`\\\`
+
+> **Exception:** \\\`api\\\` has \\\`composite: true\\\` because it exports types via its \\\`./client\\\` subpath (\\\`@myapp/api/client\\\`). If your server package similarly exposes types consumed by other packages, it needs \\\`composite: true\\\` too.
+
+- **\\\`dev\\\` script uses \\\`tsx watch\\\`** — hot-reloads on file changes
+- **\\\`start\\\` script uses \\\`node dist/index.js\\\`** — for production
+- **Needs its own Dockerfile** if it deploys separately
+- **Needs its own deploy workflow** if it deploys separately
+
+### Frontend package (React app)
+
+Examples: \\\`web\\\`, another SPA for a different audience.
+
+\\\`\\\`\\\`json
+// tsconfig.json — needs DOM libs and JSX
+"compilerOptions": {
+  "jsx": "react-jsx",
+  "lib": ["ES2022", "DOM", "DOM.Iterable"]
+}
+\\\`\\\`\\\`
+
+- **Built by Vite**, not \\\`tsc\\\` alone — \\\`"build": "tsc --noEmit && vite build"\\\`
+- **References hooks and shared directly** (both listed in tsconfig \\\`references\\\`)
+- **No \\\`composite: true\\\`** — nothing imports from a frontend app, so it doesn't need to be a project reference target. \\\`web\\\` correctly omits it.
+- **Expo is different** — \\\`mobile\\\` does not use Vite, does not extend \\\`tsconfig.base.json\\\`, and does not use \\\`"type": "module"\\\`. Expo's own toolchain handles everything. See the exception note in step 1 above.
+
+---
+
+## Connecting to Other Packages
+
+### Your new package imports from an existing one
+
+1. Add the dependency to package.json:
+
+\\\`\\\`\\\`json
+"dependencies": {
+  "@myapp/shared": "workspace:*"
+}
+\\\`\\\`\\\`
+
+2. Add the reference to tsconfig.json:
+
+\\\`\\\`\\\`json
+"references": [
+  { "path": "../shared" }
+]
+\\\`\\\`\\\`
+
+3. Run \\\`pnpm install\\\` to wire it up.
+
+### An existing package imports from your new one
+
+1. Add your package as a dependency in the consumer's package.json:
+
+\\\`\\\`\\\`json
+// packages/api/package.json
+"dependencies": {
+  "@myapp/worker": "workspace:*"
+}
+\\\`\\\`\\\`
+
+2. Add a reference in the consumer's tsconfig.json:
+
+\\\`\\\`\\\`json
+// packages/api/tsconfig.json
+"references": [
+  { "path": "../shared" },
+  { "path": "../worker" }
+]
+\\\`\\\`\\\`
+
+3. Make sure your package has \\\`"composite": true\\\` in tsconfig.json and \\\`"exports"\\\` in package.json.
+
+4. Run \\\`pnpm install\\\`.
+
+---
+
+## Adding a Deploy Workflow
+
+If the package runs as a separate service (not imported by an existing deployed package), it needs its own deploy workflow.
+
+### Path filters
+
+The deploy workflow should trigger when its own files or its dependencies change:
+
+\\\`\\\`\\\`yaml
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/worker/**"
+      - "packages/shared/**"    # if worker depends on shared
+\\\`\\\`\\\`
+
+The existing \\\`deploy-api.yml\\\` triggers on \\\`packages/api/**\\\` and \\\`packages/shared/**\\\`. The existing \\\`deploy-web.yml\\\` triggers on \\\`packages/web/**\\\`, \\\`packages/hooks/**\\\`, and \\\`packages/shared/**\\\`. Follow the same pattern — list your package and everything it imports from.
+
+### CI workflow
+
+The CI workflow (\\\`ci.yml\\\`) runs \\\`pnpm build\\\`, \\\`pnpm typecheck\\\`, and \\\`pnpm test\\\` across the entire monorepo. New packages are automatically included — turbo discovers all workspace packages. No CI changes needed unless you need a custom step.
+
+---
+
+## Turbo Pipeline
+
+The existing \\\`turbo.json\\\` tasks (\\\`build\\\`, \\\`dev\\\`, \\\`test\\\`, \\\`typecheck\\\`) work for any new package automatically, as long as the package.json scripts use the same names.
+
+If your package has a custom script (e.g., \\\`db:generate\\\` for a package with its own database), add it to turbo.json:
+
+\\\`\\\`\\\`json
+// turbo.json
+"tasks": {
+  "worker:process": {
+    "dependsOn": ["^build"],
+    "cache": false
+  }
+}
+\\\`\\\`\\\`
+
+Then run it from the root: \\\`turbo worker:process --filter=@myapp/worker\\\`.
+
+---
+
+## Checklist
+
+- [ ] \\\`packages/<name>/package.json\\\` with \\\`name\\\`, \\\`type: module\\\`, \\\`exports\\\`, scripts
+- [ ] \\\`packages/<name>/tsconfig.json\\\` extending \\\`../../tsconfig.base.json\\\`
+- [ ] \\\`packages/<name>/src/index.ts\\\` barrel export
+- [ ] \\\`composite: true\\\` in tsconfig if other packages will import from this one
+- [ ] \\\`workspace:*\\\` dependency and tsconfig \\\`references\\\` for each internal package used
+- [ ] \\\`pnpm install\\\` run to wire up the workspace
+- [ ] \\\`pnpm build\\\` succeeds with correct ordering
+- [ ] \\\`pnpm typecheck\\\` passes
+- [ ] Tests added with \\\`vitest.config.ts\\\` if applicable
+- [ ] Deploy workflow with correct path filters if the package deploys independently
+- [ ] \\\`init.sh\\\` updated if the package needs env vars or deployment configuration`,
+  },
+  {
+    name: 'Adding Middleware',
+    description:
+      'How to add cross-cutting behavior with Express HTTP middleware and tRPC procedure-level middleware: when to use each, composition patterns, procedure types, and testing.',
+    content: `# Adding Middleware
+
+How to add cross-cutting behavior — logic that runs across many requests or procedures without duplicating it in each handler. This project has two middleware systems that serve different purposes, and picking the wrong one means either missing the data you need or fighting the framework.
+
+> **Note:** This is a step-by-step guide for future implementation. The example code shown below (such as \\\`requestId\\\` and \\\`strictLimiter\\\` for specific paths) does not exist in the codebase yet -- it is a worked example. To add middleware, follow the steps below and create each file as described.
+
+## The Two Middleware Systems
+
+### Express middleware
+
+Runs on every HTTP request before tRPC sees it. Has access to the raw HTTP request and response — headers, IP address, method, path, status code. Knows nothing about tRPC procedures, user identity, or typed inputs.
+
+\\\`\\\`\\\`
+HTTP request -> Express middleware -> tRPC adapter -> procedure
+\\\`\\\`\\\`
+
+Already in the project:
+
+| Middleware | File | What it does |
+|---|---|---|
+| \\\`cors()\\\` | \\\`src/index.ts\\\` | Sets CORS headers |
+| \\\`getGlobalLimiter()\\\` | \\\`src/middleware/rateLimit.ts\\\` | 100 req/15min per IP |
+| \\\`getRequestLogger()\\\` | \\\`src/middleware/requestLogger.ts\\\` | Logs every request with pino-http |
+
+### tRPC middleware
+
+Runs inside the tRPC procedure chain. Has access to the typed context — the authenticated user (\\\`ctx.user\\\`), the database (\\\`ctx.db\\\`), the pubsub instance, and the validated input. Knows nothing about HTTP headers or IP addresses.
+
+\\\`\\\`\\\`
+tRPC adapter -> context creation -> tRPC middleware -> procedure handler
+\\\`\\\`\\\`
+
+Already in the project:
+
+| Middleware | File | What it does |
+|---|---|---|
+| \\\`protectedProcedure\\\` | \\\`src/trpc.ts\\\` | Rejects if no \\\`ctx.user\\\` (JWT required), resolves \\\`ctx.dbUser\\\` from \\\`sub\\\` |
+| \\\`adminProcedure\\\` | \\\`src/middleware/requireRole.ts\\\` | Checks \\\`ctx.dbUser.role\\\`, rejects non-admins |
+
+### How to decide which to use
+
+| You need to... | Use | Why |
+|---|---|---|
+| Read or set HTTP headers | Express | tRPC middleware doesn't have access to the raw response |
+| Rate-limit by IP address | Express | tRPC doesn't expose the client IP |
+| Log raw request method/path/status | Express | These are HTTP-level concerns |
+| Parse or transform the request body | Express | Before tRPC sees the request |
+| Check if the user is authenticated | tRPC | \\\`ctx.user\\\` comes from context creation |
+| Check the user's role or permissions | tRPC | Requires a DB lookup with \\\`ctx.db\\\` |
+| Validate or transform procedure input | tRPC | Input is typed and available after Zod parsing |
+| Log which procedure was called, by whom | tRPC | Express only sees \\\`/api/trpc\\\` — it doesn't know which procedure |
+| Add data to the context for downstream procedures | tRPC | Express can't modify tRPC context |
+| Apply logic to specific procedures or groups | tRPC | Express applies to all routes or a path prefix |
+
+**Rule of thumb:** If it's about HTTP, use Express. If it's about the caller or the data, use tRPC.
+
+---
+
+## Adding Express Middleware
+
+Express middleware is a function that takes \\\`(req, res, next)\\\`. Call \\\`next()\\\` to continue to the next middleware, or send a response to short-circuit.
+
+### Example: Adding request ID tracking
+
+Every request gets a unique ID in a header, available to all downstream code for log correlation.
+
+\\\`\\\`\\\`typescript
+// packages/api/src/middleware/requestId.ts
+import crypto from "node:crypto";
+import type { Request, Response, NextFunction } from "express";
+
+export function requestId(req: Request, res: Response, next: NextFunction): void {
+  const id = req.headers["x-request-id"] as string ?? crypto.randomUUID();
+  req.headers["x-request-id"] = id;
+  res.setHeader("x-request-id", id);
+  next();
+}
+\\\`\\\`\\\`
+
+Wire it in \\\`src/index.ts\\\`, before other middleware so the ID is available everywhere:
+
+\\\`\\\`\\\`typescript
+// packages/api/src/index.ts
+import { requestId } from "./middleware/requestId.js";
+
+app.use(requestId);              // <- add first
+app.use(getGlobalLimiter());
+app.use(getRequestLogger());
+\\\`\\\`\\\`
+
+### Example: Adding a stricter rate limit to a specific path
+
+The template already has a \\\`strictLimiter\\\` (20 req/15min). Apply it to a specific route:
+
+\\\`\\\`\\\`typescript
+// packages/api/src/index.ts
+import { strictLimiter } from "./middleware/rateLimit.js";
+
+// Apply strict limiting to a specific path only
+app.use("/api/trpc/auth", strictLimiter);
+\\\`\\\`\\\`
+
+Note: tRPC batches all procedure calls to \\\`/api/trpc\\\`, so path-based Express middleware has limited usefulness for targeting individual procedures. If you need per-procedure throttling, use tRPC middleware instead.
+
+### Where Express middleware goes
+
+\\\`\\\`\\\`typescript
+// packages/api/src/index.ts — the order matters
+
+app.use(cors({ ... }));          // 1. CORS (must be first for preflight)
+app.use(requestId);              // 2. Request ID (before logging)
+app.use(getGlobalLimiter());     // 3. Rate limiting (before any processing)
+app.use(getRequestLogger());     // 4. Logging (after ID is set, so logs include it)
+
+app.get("/api/health", ...);  // 5. Health check (before tRPC, so it's fast)
+
+app.use("/api/trpc", ...);    // 6. tRPC adapter
+\\\`\\\`\\\`
+
+Order matters. Middleware runs top to bottom. Put cheap rejections (rate limiting) before expensive work (tRPC procedure routing).
+
+### How to test Express middleware
+
+Test it in isolation — call the function with mock req/res/next:
+
+\\\`\\\`\\\`typescript
+import { describe, it, expect, vi } from "vitest";
+import type { Request, Response, NextFunction } from "express";
+import { requestId } from "./requestId.js";
+
+describe("requestId", () => {
+  it("adds a request ID when none exists", () => {
+    const req = { headers: {} } as Request;
+    const res = { setHeader: vi.fn() } as unknown as Response;
+    const next = vi.fn() as NextFunction;
+
+    requestId(req, res, next);
+
+    expect(req.headers["x-request-id"]).toBeDefined();
+    expect(res.setHeader).toHaveBeenCalledWith("x-request-id", expect.any(String));
+    expect(next).toHaveBeenCalled();
+  });
+
+  it("preserves existing request ID", () => {
+    const req = { headers: { "x-request-id": "existing-id" } } as unknown as Request;
+    const res = { setHeader: vi.fn() } as unknown as Response;
+    const next = vi.fn() as NextFunction;
+
+    requestId(req, res, next);
+
+    expect(req.headers["x-request-id"]).toBe("existing-id");
+    expect(next).toHaveBeenCalled();
+  });
+});
+\\\`\\\`\\\`
+
+---
+
+## Adding tRPC Middleware
+
+tRPC middleware is a function passed to \\\`.use()\\\` on a procedure. It receives the context and input, and calls \\\`next()\\\` to continue (optionally extending the context with new data).
+
+### How the existing chain works
+
+\\\`\\\`\\\`typescript
+// packages/api/src/trpc.ts
+const t = initTRPC.context<Context>().create();
+
+export const publicProcedure = t.procedure;
+// Anyone can call this. Context has: { user: JWTPayload | null, db, pubsub }
+
+export const protectedProcedure = t.procedure.use(async ({ ctx, next }) => {
+  if (!ctx.user) {
+    throw new TRPCError({ code: "UNAUTHORIZED" });
+  }
+  return next({ ctx: { ...ctx, user: ctx.user } });
+});
+// Logged-in users only. Context now guarantees: { user: JWTPayload (non-null), db, pubsub }
+\\\`\\\`\\\`
+
+\\\`\\\`\\\`typescript
+// packages/api/src/middleware/requireRole.ts
+export const adminProcedure = protectedProcedure.use(async ({ ctx, next }) => {
+  // ... looks up user in DB, checks role ...
+  return next({ ctx: { ...ctx, dbUser } });
+});
+// Admins only. Context now adds: { dbUser: the full user row from the database }
+\\\`\\\`\\\`
+
+Middleware chains. \\\`adminProcedure\\\` builds on \\\`protectedProcedure\\\`, which builds on \\\`publicProcedure\\\`. Each layer can reject the request or add data to the context.
+
+### Example: Audit logging middleware
+
+Log every mutation — who called it, what procedure, when. This is the kind of thing that feels like it should be Express middleware but can't be, because Express only sees \\\`POST /api/trpc\\\` — it doesn't know which procedure was called.
+
+\\\`\\\`\\\`typescript
+// packages/api/src/middleware/auditLog.ts
+import { getLogger } from "../lib/logger.js";
+import { protectedProcedure } from "../trpc.js";
+
+export const auditedProcedure = protectedProcedure.use(async ({ ctx, path, type, next }) => {
+  const start = Date.now();
+  const result = await next();
+  const durationMs = Date.now() - start;
+
+  if (type === "mutation") {
+    getLogger().info(
+      {
+        procedure: path,
+        userEmail: ctx.user?.email,
+        durationMs,
+      },
+      "Audit: mutation executed",
+    );
+  }
+
+  return result;
+});
+\\\`\\\`\\\`
+
+Use it in a router:
+
+\\\`\\\`\\\`typescript
+// packages/api/src/routers/post.ts
+import { auditedProcedure } from "../middleware/auditLog.js";
+
+export const postRouter = router({
+  list: publicProcedure.query(/* ... */),
+  create: auditedProcedure           // <- replaces protectedProcedure
+    .input(CreatePostSchema)
+    .mutation(/* ... */),
+});
+\\\`\\\`\\\`
+
+The \\\`path\\\` parameter gives you the procedure name (e.g., \\\`post.create\\\`). The \\\`type\\\` is \\\`"query"\\\`, \\\`"mutation"\\\`, or \\\`"subscription"\\\`.
+
+### Example: Owner-only middleware
+
+Reusable middleware that checks if the caller owns a resource. Instead of duplicating the ownership check in every mutation, extract it:
+
+\\\`\\\`\\\`typescript
+// packages/api/src/middleware/requireOwner.ts
+import { TRPCError } from "@trpc/server";
+import { eq } from "drizzle-orm";
+import { protectedProcedure } from "../trpc.js";
+import { users } from "../db/schema.js";
+
+export const ownerProcedure = protectedProcedure.use(async ({ ctx, next }) => {
+  const email = ctx.user?.email as string;
+
+  const [dbUser] = await ctx.db
+    .select()
+    .from(users)
+    .where(eq(users.email, email))
+    .limit(1);
+
+  if (!dbUser) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "User not found" });
+  }
+
+  return next({ ctx: { ...ctx, dbUser } });
+});
+\\\`\\\`\\\`
+
+Now procedures can use \\\`ctx.dbUser\\\` without repeating the lookup:
+
+\\\`\\\`\\\`typescript
+update: ownerProcedure
+  .input(UpdatePostSchema)
+  .mutation(async ({ ctx, input }) => {
+    const [post] = await ctx.db
+      .select()
+      .from(posts)
+      .where(eq(posts.id, input.id))
+      .limit(1);
+
+    if (!post) throw new TRPCError({ code: "NOT_FOUND" });
+    if (post.authorId !== ctx.user.sub && ctx.dbUser.role !== "admin") {
+      throw new TRPCError({ code: "FORBIDDEN" });
+    }
+
+    // ... do the update
+  }),
+\\\`\\\`\\\`
+
+### Example: Input transform middleware
+
+Middleware that runs after Zod validation and normalizes the input — trimming strings, lowercasing emails, etc. This uses the \\\`rawInput\\\` option:
+
+\\\`\\\`\\\`typescript
+// packages/api/src/middleware/normalizeInput.ts
+import { publicProcedure } from "../trpc.js";
+
+export const normalizedProcedure = publicProcedure.use(async ({ rawInput, next }) => {
+  // Trim all string values in the input
+  if (rawInput && typeof rawInput === "object") {
+    for (const [key, value] of Object.entries(rawInput)) {
+      if (typeof value === "string") {
+        (rawInput as Record<string, unknown>)[key] = value.trim();
+      }
+    }
+  }
+  return next();
+});
+\\\`\\\`\\\`
+
+Note: In practice, do string normalization in the Zod schema with \\\`.transform()\\\` instead — it's more explicit and type-safe. Use middleware transforms for cross-cutting concerns that don't belong in individual schemas.
+
+### Extending the context type
+
+When middleware adds data to the context (like \\\`adminProcedure\\\` adds \\\`dbUser\\\`), downstream procedures see it as typed. This happens automatically because \\\`next({ ctx: { ...ctx, dbUser } })\\\` extends the context type.
+
+If your middleware always adds a value, TypeScript infers it as present in downstream procedures. If it conditionally adds a value, use a type assertion or a branded type.
+
+### How to test tRPC middleware
+
+Test it through the procedure chain using \\\`createCaller\\\`, the same way you test routers:
+
+\\\`\\\`\\\`typescript
+import { describe, it, expect, vi } from "vitest";
+
+vi.mock("../db/index.js", () => ({
+  getConnectionString: vi.fn(() => "postgresql://mock"),
+  getDb: vi.fn(() => ({})),
+}));
+vi.mock("jose", () => ({
+  createRemoteJWKSet: vi.fn(() => "mock"),
+  jwtVerify: vi.fn().mockResolvedValue({
+    payload: { sub: "u1", email: "test@test.com" },
+    protectedHeader: { alg: "RS256" },
+  }),
+}));
+
+import { appRouter } from "../routers/index.js";
+
+describe("auditedProcedure", () => {
+  it("allows authenticated users", async () => {
+    const caller = appRouter.createCaller({
+      user: { sub: "u1", email: "test@test.com" },
+      db: mockDb as any,
+      pubsub: mockPubsub as any,
+    });
+    // Should not throw
+    await caller.post.create({ title: "Hi", body: "World" });
+  });
+
+  it("rejects unauthenticated users", async () => {
+    const caller = appRouter.createCaller({
+      user: null,
+      db: mockDb as any,
+      pubsub: mockPubsub as any,
+    });
+    await expect(
+      caller.post.create({ title: "Hi", body: "World" }),
+    ).rejects.toThrow("UNAUTHORIZED");
+  });
+});
+\\\`\\\`\\\`
+
+---
+
+## Creating a New Procedure Type
+
+When you find yourself applying the same tRPC middleware to many procedures, create a named procedure type. The template already does this with \\\`protectedProcedure\\\` and \\\`adminProcedure\\\`.
+
+### The procedure hierarchy
+
+\\\`\\\`\\\`
+publicProcedure                    <- no auth, anyone can call
+  +-- protectedProcedure           <- JWT required, ctx.user guaranteed
+        |-- adminProcedure         <- role === "admin", ctx.dbUser added
+        |-- ownerProcedure         <- ctx.dbUser added (for ownership checks)
+        +-- auditedProcedure       <- logs mutations with caller identity
+\\\`\\\`\\\`
+
+Each level builds on the previous one. You never need to re-check auth in \\\`adminProcedure\\\` because \\\`protectedProcedure\\\` already did it.
+
+### Where to define new procedure types
+
+- Simple middleware (one check, no DB): add to \\\`src/trpc.ts\\\` alongside \\\`protectedProcedure\\\`
+- Middleware that queries the DB or has complex logic: create a file in \\\`src/middleware/\\\`
+- Middleware used by a single router: define it in that router file (no need to export it)
+
+### Naming convention
+
+Name the procedure type after what it requires, not what it does:
+
+| Name | Meaning |
+|---|---|
+| \\\`protectedProcedure\\\` | Requires authentication |
+| \\\`adminProcedure\\\` | Requires admin role |
+| \\\`ownerProcedure\\\` | Requires the caller's DB user (for ownership checks) |
+| \\\`auditedProcedure\\\` | Requires auth + logs the call (side effect) |
+
+---
+
+## Common Patterns
+
+### Composing multiple middlewares
+
+Chain \\\`.use()\\\` calls to compose multiple concerns:
+
+\\\`\\\`\\\`typescript
+export const auditedAdminProcedure = adminProcedure.use(async ({ ctx, path, type, next }) => {
+  const result = await next();
+  if (type === "mutation") {
+    getLogger().info({ procedure: path, admin: ctx.dbUser.email }, "Admin action");
+  }
+  return result;
+});
+\\\`\\\`\\\`
+
+### Middleware that runs after the handler
+
+Call \\\`next()\\\` first, then do your work. Useful for logging, metrics, or cleanup:
+
+\\\`\\\`\\\`typescript
+export const timedProcedure = publicProcedure.use(async ({ path, next }) => {
+  const start = Date.now();
+  const result = await next();
+  getLogger().info({ procedure: path, durationMs: Date.now() - start }, "Procedure timing");
+  return result;
+});
+\\\`\\\`\\\`
+
+### Middleware that catches errors
+
+Wrap \\\`next()\\\` in a try/catch to handle errors from downstream procedures:
+
+\\\`\\\`\\\`typescript
+export const errorWrappedProcedure = publicProcedure.use(async ({ path, next }) => {
+  try {
+    return await next();
+  } catch (err) {
+    if (err instanceof TRPCError) throw err;  // let tRPC errors pass through
+    getLogger().error({ procedure: path, err }, "Unexpected error in procedure");
+    throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Something went wrong" });
+  }
+});
+\\\`\\\`\\\`
+
+This prevents internal error details from leaking to the client while still logging them server-side.
+
+---
+
+## Checklist
+
+**Express middleware**
+- [ ] Function with \\\`(req, res, next)\\\` signature
+- [ ] File in \\\`packages/api/src/middleware/\\\`
+- [ ] Wired in \\\`src/index.ts\\\` with \\\`app.use()\\\` in the correct order
+- [ ] Calls \\\`next()\\\` to continue (or sends a response to reject)
+- [ ] Tested in isolation with mock req/res/next
+
+**tRPC middleware**
+- [ ] Built on the right base procedure (\\\`publicProcedure\\\`, \\\`protectedProcedure\\\`, etc.)
+- [ ] File in \\\`packages/api/src/middleware/\\\` if reused, or inline if single-router
+- [ ] Calls \\\`next()\\\` with extended context if adding data
+- [ ] Throws \\\`TRPCError\\\` with the right code to reject
+- [ ] Tested through \\\`createCaller\\\` with appropriate mock context
+
+**Naming**
+- [ ] Procedure types named after what they require (\\\`adminProcedure\\\`), not what they do
+- [ ] Express middleware functions named after their effect (\\\`requestLogger\\\`, \\\`requestId\\\`)`,
+  },
 ];
