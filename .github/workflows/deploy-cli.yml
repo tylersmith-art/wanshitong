@@ -67,18 +67,20 @@ jobs:
           path: packages/cli/dist/wst-bundle.cjs
 
       - name: Update Homebrew formula
-        if: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}
         env:
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "HOMEBREW_TAP_TOKEN not set, skipping formula update"
+            exit 0
+          fi
+
           VERSION=${{ steps.version.outputs.version }}
           SHA=$(shasum -a 256 "wst-${VERSION}.tar.gz" | cut -d' ' -f1)
           echo "Version: ${VERSION}, SHA: ${SHA}"
 
-          # Get current formula to obtain its SHA for the update API call
           FORMULA_SHA=$(gh api repos/tylersmith-art/homebrew-wst/contents/Formula/wst.rb --jq '.sha')
 
-          # Build updated formula
           FORMULA=$(cat <<RUBY
           class Wst < Formula
             desc "Wan Shi Tong CLI - Architecture knowledge search"
@@ -97,7 +99,6 @@ jobs:
           RUBY
           )
 
-          # Push updated formula
           gh api repos/tylersmith-art/homebrew-wst/contents/Formula/wst.rb \
             -X PUT \
             -f message="chore: update wst to v${VERSION}" \
