@@ -28,7 +28,7 @@ jobs:
 
       - name: Load image into k3s
         run: |
-          docker save ${{ env.REPO_NAME }}-api:${{ env.GIT_SHA }} | sudo k3s ctr images import -
+          docker save ${{ env.REPO_NAME }}-api:${{ env.GIT_SHA }} | k3s ctr images import -
 
       - name: Generate K8s secrets
         run: |
