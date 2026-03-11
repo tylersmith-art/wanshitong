@@ -9,7 +9,7 @@ on:
 
 jobs:
   deploy:
-    runs-on: self-hosted
+    runs-on: [self-hosted, linux, deploy]
     steps:
       - uses: actions/checkout@v4
 
@@ -19,7 +19,7 @@ jobs:
 
       - name: Generate Postgres secrets
         run: |
-          ENV_FILE="/Users/tylersmith/envs/${{ env.REPO_NAME }}-postgres.env"
+          ENV_FILE="/home/tylersmith/envs/${{ env.REPO_NAME }}-postgres.env"
           if [ ! -f "$ENV_FILE" ]; then
             echo "ERROR: $ENV_FILE not found. Run init.sh first."
             exit 1

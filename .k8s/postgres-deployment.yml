@@ -10,7 +10,7 @@ spec:
   persistentVolumeReclaimPolicy: Retain
   storageClassName: hostpath
   hostPath:
-    path: /Volumes/Main/wanshitong/postgres
+    path: /srv/k8s-data/wanshitong/postgres
     type: DirectoryOrCreate
 ---
 apiVersion: v1

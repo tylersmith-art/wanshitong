@@ -15,7 +15,7 @@ on:
 
 jobs:
   deploy-cli:
-    runs-on: self-hosted
+    runs-on: [self-hosted, linux, deploy]
     permissions:
       contents: write
     steps:
