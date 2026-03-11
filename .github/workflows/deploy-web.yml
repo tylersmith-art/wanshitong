@@ -39,6 +39,10 @@ jobs:
             -t ${{ env.REPO_NAME }}-ui:${{ env.GIT_SHA }} \
             .
 
+      - name: Load image into k3s
+        run: |
+          docker save ${{ env.REPO_NAME }}-ui:${{ env.GIT_SHA }} | sudo k3s ctr images import -
+
       - name: Deploy to Kubernetes
         run: |
           sed -e "s|wanshitong|${{ env.REPO_NAME }}|g" \
